@@ -1,0 +1,45 @@
+name: Build & Release KizShop
+
+on:
+  push:
+    branches: [ master, main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore KizShop.sln
+
+    - name: Build solution
+      run: dotnet build KizShop.sln --configuration Release --no-restore
+
+    - name: Run unit tests
+      run: dotnet test KizShop.sln --configuration Release --no-build --verbosity normal
+
+    - name: Upload KizShop.dll artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: KizShop
+        path: src/KizShop/bin/Release/netstandard2.1/KizShop.dll
+
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: src/KizShop/bin/Release/netstandard2.1/KizShop.dll
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{67983F3E-E77A-45E6-915F-CC543995DC81}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KizShop", "src\KizShop\KizShop.csproj", "{EE83E3D1-0D59-4D84-BEEF-234A46B6E03E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{50078EFA-D0E5-4A51-89CE-8EBA25FA290F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KizShop.Tests", "tests\KizShop.Tests\KizShop.Tests.csproj", "{E5FA332D-C443-4C66-9B54-A3B00D637AF7}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EE83E3D1-0D59-4D84-BEEF-234A46B6E03E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE83E3D1-0D59-4D84-BEEF-234A46B6E03E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE83E3D1-0D59-4D84-BEEF-234A46B6E03E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE83E3D1-0D59-4D84-BEEF-234A46B6E03E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5FA332D-C443-4C66-9B54-A3B00D637AF7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5FA332D-C443-4C66-9B54-A3B00D637AF7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5FA332D-C443-4C66-9B54-A3B00D637AF7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5FA332D-C443-4C66-9B54-A3B00D637AF7}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EE83E3D1-0D59-4D84-BEEF-234A46B6E03E} = {67983F3E-E77A-45E6-915F-CC543995DC81}
+		{E5FA332D-C443-4C66-9B54-A3B00D637AF7} = {50078EFA-D0E5-4A51-89CE-8EBA25FA290F}
+	EndGlobalSection
+EndGlobal

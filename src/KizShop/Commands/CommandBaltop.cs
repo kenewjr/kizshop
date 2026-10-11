@@ -1,0 +1,56 @@
+using System;
+using System.Collections.Generic;
+using Rocket.API;
+using Rocket.Core.Utils;
+using Rocket.Unturned.Chat;
+using Rocket.Unturned.Player;
+
+namespace KizShop.Commands
+{
+    public class CommandBaltop : IRocketCommand
+    {
+        public AllowedCaller AllowedCaller => AllowedCaller.Both;
+        public string Name => "baltop";
+        public string Help => "Show the top richest players.";
+        public string Syntax => "";
+        public List<string> Aliases => new List<string>();
+        public List<string> Permissions => new List<string> { "kizshop.baltop" };
+
+        public void Execute(IRocketPlayer caller, string[] command)
+        {
+            var plugin = KizShopPlugin.Instance;
+            if (plugin == null || plugin.Economy == null) return;
+
+            int count = plugin.Configuration.Instance.BaltopCount;
+            if (count <= 0) count = 10;
+
+            _ = plugin.Economy.GetTopBalancesAsync(count).ContinueWith(t =>
+            {
+                var list = t.Result;
+                TaskDispatcher.QueueOnMainThread(() =>
+                {
+                    if (list == null || list.Count == 0)
+                    {
+                        UnturnedChat.Say(caller, plugin.Translate("baltop_empty"), UnityEngine.Color.yellow);
+                        return;
+                    }
+
+                    UnturnedChat.Say(caller, plugin.Translate("baltop_header", list.Count), UnityEngine.Color.cyan);
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var entry = list[i];
+                        string displayName = entry.SteamId.ToString();
+                        var onlinePlayer = UnturnedPlayer.FromCSteamID(new Steamworks.CSteamID(entry.SteamId));
+                        if (onlinePlayer != null)
+                        {
+                            displayName = onlinePlayer.CharacterName;
+                        }
+
+                        var formatted = plugin.FormatMoney(entry.Balance);
+                        UnturnedChat.Say(caller, plugin.Translate("baltop_entry", i + 1, displayName, formatted), UnityEngine.Color.white);
+                    }
+                });
+            });
+        }
+    }
+}
