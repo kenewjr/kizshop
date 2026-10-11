@@ -26,7 +26,7 @@ namespace KizShop.Commands
                 if (command.Length < 1)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("buy_usage"), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("buy_usage"), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -34,7 +34,7 @@ namespace KizShop.Commands
                 if (command.Length >= 2 && (!int.TryParse(command[1], out amount) || amount <= 0))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("buy_usage"), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("buy_usage"), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -52,16 +52,16 @@ namespace KizShop.Commands
                     {
                         var costStr = plugin.FormatMoney(result.Price);
                         var remStr = plugin.FormatMoney(result.NewBalance);
-                        UnturnedChat.Say(caller, plugin.Translate("buy_success", result.Quantity, result.ItemEntry.Name, costStr, remStr), UnityEngine.Color.green);
+                        KizChat.Say(caller, plugin.Translate("buy_success", result.Quantity, result.ItemEntry.Name, costStr, remStr), UnityEngine.Color.green);
                     }
                     else if (result.CandidateNames != null && result.CandidateNames.Count > 0)
                     {
                         string candidates = string.Join(", ", result.CandidateNames);
-                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow);
+                        KizChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow);
                     }
                     else
                     {
-                        UnturnedChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
+                        KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
                     }
                 });
             });

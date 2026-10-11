@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-11
+
+### Fixed
+- **Chat Rich Text Rendering**: Replaced default plain text chat with `KizChat.Say` using `rich: true` across all commands and game events, properly rendering colored text instead of printing raw `<color=...>` tags in game.
+- **UI Effect Detection & Fallback**: Validated server-side `EffectAsset` existence before calling `sendUIEffect`. If the UI bundle is not loaded, `/shop` cleanly falls back to the formatted chat catalog and `/shopui` warns the player, preventing modal cursor freezes without a visible UI.
+- **Documentation**: Added [`docs/VISUAL_UI.md`](file:///e:/project/kizshop/docs/VISUAL_UI.md) detailing Unturned UI effect asset structure, `.dat` specification, and hierarchy naming requirements.
+
 ## [0.2.0] - 2026-10-11
 
 ### Added

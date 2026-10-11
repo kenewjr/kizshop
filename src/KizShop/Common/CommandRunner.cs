@@ -16,7 +16,7 @@ namespace KizShop.Common
             if (plugin == null || plugin.Economy == null)
             {
                 string offlineMsg = plugin != null ? plugin.Translate("plugin_offline") : "KizShop is offline.";
-                UnturnedChat.Say(caller, offlineMsg, UnityEngine.Color.red);
+                KizChat.Say(caller, offlineMsg, UnityEngine.Color.red);
                 return;
             }
 
@@ -40,7 +40,7 @@ namespace KizShop.Common
                     plugin.Dispatcher?.QueueOnMainThread(() =>
                     {
                         string msg = plugin.Translate("command_error_generic");
-                        UnturnedChat.Say(caller, msg, UnityEngine.Color.red);
+                        KizChat.Say(caller, msg, UnityEngine.Color.red);
                     });
                 }
             });

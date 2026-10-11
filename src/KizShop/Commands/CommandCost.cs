@@ -25,7 +25,7 @@ namespace KizShop.Commands
                 if (command.Length < 1)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("cost_usage"), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("cost_usage"), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -36,7 +36,7 @@ namespace KizShop.Commands
                 {
                     string candidates = string.Join(", ", itemLookup.CandidateNames);
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -47,7 +47,7 @@ namespace KizShop.Commands
                     string sellStr = itemEntry.CanSell && itemEntry.SellPrice.HasValue ? plugin.FormatMoney(Money.FromDecimal(itemEntry.SellPrice.Value)) : plugin.Translate("cost_not_available");
 
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("cost_item_info", itemEntry.Name, itemEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan));
+                        KizChat.Say(caller, plugin.Translate("cost_item_info", itemEntry.Name, itemEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan));
                     return;
                 }
 
@@ -56,7 +56,7 @@ namespace KizShop.Commands
                 {
                     string candidates = string.Join(", ", vehLookup.CandidateNames);
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -67,12 +67,12 @@ namespace KizShop.Commands
                     string sellStr = vehEntry.CanSell && vehEntry.SellPrice.HasValue ? plugin.FormatMoney(Money.FromDecimal(vehEntry.SellPrice.Value)) : plugin.Translate("cost_not_available");
 
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("cost_item_info", vehEntry.Name, vehEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan));
+                        KizChat.Say(caller, plugin.Translate("cost_item_info", vehEntry.Name, vehEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan));
                     return;
                 }
 
                 plugin.Dispatcher.QueueOnMainThread(() =>
-                    UnturnedChat.Say(caller, plugin.Translate("cost_not_found", query), UnityEngine.Color.red));
+                    KizChat.Say(caller, plugin.Translate("cost_not_found", query), UnityEngine.Color.red));
 
                 await Task.CompletedTask;
             });

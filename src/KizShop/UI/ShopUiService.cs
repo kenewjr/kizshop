@@ -36,14 +36,17 @@ namespace KizShop.UI
 
         public bool IsUiOpen(ulong steamId) => _states.ContainsKey(steamId);
 
-        public async Task OpenShopAsync(ulong steamId)
+        public async Task<bool> OpenShopAsync(ulong steamId)
         {
             var cfg = _configProvider();
-            if (!cfg.EnableVisualUI) return;
+            if (!cfg.EnableVisualUI) return false;
+
+            bool opened = _uiGateway.OpenUi(steamId, cfg.UIEffectId, cfg.UIKey);
+            if (!opened) return false;
 
             var state = _states.GetOrAdd(steamId, _ => new ShopUiPlayerState());
-            _uiGateway.OpenUi(steamId, cfg.UIEffectId, cfg.UIKey);
             await RenderUiAsync(steamId).ConfigureAwait(false);
+            return true;
         }
 
         public void CloseShop(ulong steamId)

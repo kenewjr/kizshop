@@ -2,22 +2,35 @@ using System;
 using SDG.NetTransport;
 using SDG.Unturned;
 using Steamworks;
+using KizShop.Common;
 
 namespace KizShop.UI
 {
     public class UnturnedShopUiGateway : IShopUiGateway
     {
-        public void OpenUi(ulong steamId, ushort effectId, short key)
+        public bool OpenUi(ulong steamId, ushort effectId, short key)
         {
             try
             {
                 var player = PlayerTool.getPlayer(new CSteamID(steamId));
-                if (player == null) return;
+                if (player == null) return false;
+
+                var effectAsset = Assets.find(EAssetType.EFFECT, effectId);
+                if (effectAsset == null)
+                {
+                    KizLog.Warning($"[KizShop] Visual UI Effect ID {effectId} is not loaded on this server. Skipping sendUIEffect.");
+                    return false;
+                }
 
                 EffectManager.sendUIEffect(effectId, key, player.channel.GetOwnerTransportConnection(), true);
                 player.enablePluginWidgetFlag(EPluginWidgetFlags.Modal);
+                return true;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                KizLog.Error($"[KizShop] Failed to open UI effect {effectId}: {ex.Message}");
+                return false;
+            }
         }
 
         public void CloseUi(ulong steamId, ushort effectId, short key)

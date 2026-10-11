@@ -10,9 +10,12 @@ namespace KizShop.Tests.Mocks
         public Dictionary<string, string> TextUpdates { get; } = new Dictionary<string, string>();
         public Dictionary<string, bool> VisibilityUpdates { get; } = new Dictionary<string, bool>();
 
-        public void OpenUi(ulong steamId, ushort effectId, short key)
+        public bool OpenUiSuccess { get; set; } = true;
+
+        public bool OpenUi(ulong steamId, ushort effectId, short key)
         {
             OpenCalls.Add((steamId, effectId, key));
+            return OpenUiSuccess;
         }
 
         public void CloseUi(ulong steamId, ushort effectId, short key)

@@ -28,7 +28,7 @@ namespace KizShop.UI
 
     public interface IShopUiGateway
     {
-        void OpenUi(ulong steamId, ushort effectId, short key);
+        bool OpenUi(ulong steamId, ushort effectId, short key);
         void CloseUi(ulong steamId, ushort effectId, short key);
         void UpdateText(ulong steamId, short key, string elementName, string text);
         void UpdateVisibility(ulong steamId, short key, string elementName, bool visible);

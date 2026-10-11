@@ -28,7 +28,7 @@ namespace KizShop.Commands
                 if (command.Length < 1)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -41,7 +41,7 @@ namespace KizShop.Commands
                     case "reload":
                         plugin.ReloadPlugin();
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            UnturnedChat.Say(caller, plugin.Translate("kizshop_reloaded"), UnityEngine.Color.green));
+                            KizChat.Say(caller, plugin.Translate("kizshop_reloaded"), UnityEngine.Color.green));
                         break;
 
                     case "additem":
@@ -50,7 +50,7 @@ namespace KizShop.Commands
                             !decimal.TryParse(args[3], NumberStyles.Number, CultureInfo.InvariantCulture, out var buyPrice))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_additem_usage"), UnityEngine.Color.yellow));
+                                KizChat.Say(caller, plugin.Translate("kizshop_additem_usage"), UnityEngine.Color.yellow));
                             return;
                         }
 
@@ -76,11 +76,11 @@ namespace KizShop.Commands
                         {
                             if (itemValError == null)
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_item_added", args[2], itemId), UnityEngine.Color.green);
+                                KizChat.Say(caller, plugin.Translate("kizshop_item_added", args[2], itemId), UnityEngine.Color.green);
                             }
                             else
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("invalid_catalog_entry", itemValError), UnityEngine.Color.red);
+                                KizChat.Say(caller, plugin.Translate("invalid_catalog_entry", itemValError), UnityEngine.Color.red);
                             }
                         });
                         break;
@@ -89,7 +89,7 @@ namespace KizShop.Commands
                         if (args.Count < 2 || !ushort.TryParse(args[1], out var remId))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_removeitem_usage"), UnityEngine.Color.yellow));
+                                KizChat.Say(caller, plugin.Translate("kizshop_removeitem_usage"), UnityEngine.Color.yellow));
                             return;
                         }
 
@@ -98,11 +98,11 @@ namespace KizShop.Commands
                         {
                             if (remSuccess)
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_item_removed", remId), UnityEngine.Color.green);
+                                KizChat.Say(caller, plugin.Translate("kizshop_item_removed", remId), UnityEngine.Color.green);
                             }
                             else
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("cost_not_found", remId), UnityEngine.Color.red);
+                                KizChat.Say(caller, plugin.Translate("cost_not_found", remId), UnityEngine.Color.red);
                             }
                         });
                         break;
@@ -112,7 +112,7 @@ namespace KizShop.Commands
                             !decimal.TryParse(args[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var newBuy))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_setitemprice_usage"), UnityEngine.Color.yellow));
+                                KizChat.Say(caller, plugin.Translate("kizshop_setitemprice_usage"), UnityEngine.Color.yellow));
                             return;
                         }
 
@@ -127,11 +127,11 @@ namespace KizShop.Commands
                         {
                             if (priceErr == null)
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_item_price_set", priceItemId), UnityEngine.Color.green);
+                                KizChat.Say(caller, plugin.Translate("kizshop_item_price_set", priceItemId), UnityEngine.Color.green);
                             }
                             else
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("invalid_catalog_entry", priceErr), UnityEngine.Color.red);
+                                KizChat.Say(caller, plugin.Translate("invalid_catalog_entry", priceErr), UnityEngine.Color.red);
                             }
                         });
                         break;
@@ -141,7 +141,7 @@ namespace KizShop.Commands
                             !decimal.TryParse(args[3], NumberStyles.Number, CultureInfo.InvariantCulture, out var vehBuyPrice))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_addveh_usage"), UnityEngine.Color.yellow));
+                                KizChat.Say(caller, plugin.Translate("kizshop_addveh_usage"), UnityEngine.Color.yellow));
                             return;
                         }
 
@@ -167,11 +167,11 @@ namespace KizShop.Commands
                         {
                             if (vehValErr == null)
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_veh_added", args[2], vehId), UnityEngine.Color.green);
+                                KizChat.Say(caller, plugin.Translate("kizshop_veh_added", args[2], vehId), UnityEngine.Color.green);
                             }
                             else
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("invalid_catalog_entry", vehValErr), UnityEngine.Color.red);
+                                KizChat.Say(caller, plugin.Translate("invalid_catalog_entry", vehValErr), UnityEngine.Color.red);
                             }
                         });
                         break;
@@ -180,7 +180,7 @@ namespace KizShop.Commands
                         if (args.Count < 2 || !ushort.TryParse(args[1], out var remVehId))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_removeveh_usage"), UnityEngine.Color.yellow));
+                                KizChat.Say(caller, plugin.Translate("kizshop_removeveh_usage"), UnityEngine.Color.yellow));
                             return;
                         }
 
@@ -189,11 +189,11 @@ namespace KizShop.Commands
                         {
                             if (remVehSuccess)
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_veh_removed", remVehId), UnityEngine.Color.green);
+                                KizChat.Say(caller, plugin.Translate("kizshop_veh_removed", remVehId), UnityEngine.Color.green);
                             }
                             else
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("cost_not_found", remVehId), UnityEngine.Color.red);
+                                KizChat.Say(caller, plugin.Translate("cost_not_found", remVehId), UnityEngine.Color.red);
                             }
                         });
                         break;
@@ -203,7 +203,7 @@ namespace KizShop.Commands
                             !decimal.TryParse(args[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var newVehBuy))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_setvehprice_usage"), UnityEngine.Color.yellow));
+                                KizChat.Say(caller, plugin.Translate("kizshop_setvehprice_usage"), UnityEngine.Color.yellow));
                             return;
                         }
 
@@ -218,18 +218,18 @@ namespace KizShop.Commands
                         {
                             if (vehPriceErr == null)
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("kizshop_veh_price_set", priceVehId), UnityEngine.Color.green);
+                                KizChat.Say(caller, plugin.Translate("kizshop_veh_price_set", priceVehId), UnityEngine.Color.green);
                             }
                             else
                             {
-                                UnturnedChat.Say(caller, plugin.Translate("invalid_catalog_entry", vehPriceErr), UnityEngine.Color.red);
+                                KizChat.Say(caller, plugin.Translate("invalid_catalog_entry", vehPriceErr), UnityEngine.Color.red);
                             }
                         });
                         break;
 
                     default:
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            UnturnedChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow));
+                            KizChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow));
                         break;
                 }
 

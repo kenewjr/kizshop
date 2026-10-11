@@ -44,7 +44,7 @@ namespace KizShop
         public bool EnableVisualUI { get; set; } = true;
         public ushort UIEffectId { get; set; } = 32001;
         public short UIKey { get; set; } = 32001;
-        public bool UseVisualUiForShopCommand { get; set; } = false;
+        public bool UseVisualUiForShopCommand { get; set; } = true;
         public int UIItemsPerPage { get; set; } = 6;
 
         // Discord Webhook settings
@@ -94,7 +94,7 @@ namespace KizShop
             EnableVisualUI = true;
             UIEffectId = 32001;
             UIKey = 32001;
-            UseVisualUiForShopCommand = false;
+            UseVisualUiForShopCommand = true;
             UIItemsPerPage = 6;
 
             DiscordWebhookEnabled = false;

@@ -27,14 +27,14 @@ namespace KizShop.Commands
                 if (command.Length < 2)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("pay_usage"), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("pay_usage"), UnityEngine.Color.yellow));
                     return;
                 }
 
                 if (!decimal.TryParse(command[1], NumberStyles.Number, CultureInfo.InvariantCulture, out var rawAmount))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red));
                     return;
                 }
 
@@ -42,7 +42,7 @@ namespace KizShop.Commands
                 if (!Money.TryFromDecimal(rawAmount, maxTx, out var amount, out var moneyErr))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("invalid_money_amount", moneyErr), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("invalid_money_amount", moneyErr), UnityEngine.Color.red));
                     return;
                 }
 
@@ -62,7 +62,7 @@ namespace KizShop.Commands
                     if (parsedId < 76561197960265728ul || parsedId > 76561202255233023ul)
                     {
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            UnturnedChat.Say(caller, plugin.Translate("invalid_steamid"), UnityEngine.Color.red));
+                            KizChat.Say(caller, plugin.Translate("invalid_steamid"), UnityEngine.Color.red));
                         return;
                     }
 
@@ -71,7 +71,7 @@ namespace KizShop.Commands
                     if (!exists)
                     {
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
+                            KizChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
                         return;
                     }
                     targetSteamId = parsedId;
@@ -80,14 +80,14 @@ namespace KizShop.Commands
                 if (targetSteamId == 0)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
                     return;
                 }
 
                 if (targetSteamId == sender.CSteamID.m_SteamID)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("pay_self"), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("pay_self"), UnityEngine.Color.red));
                     return;
                 }
 
@@ -103,23 +103,23 @@ namespace KizShop.Commands
                         var formattedAmount = plugin.FormatMoney(amount);
                         var formattedBal = plugin.FormatMoney(result.FromNewBalance);
 
-                        UnturnedChat.Say(caller, plugin.Translate("pay_sent", formattedAmount, targetName, formattedBal), UnityEngine.Color.green);
+                        KizChat.Say(caller, plugin.Translate("pay_sent", formattedAmount, targetName, formattedBal), UnityEngine.Color.green);
 
                         if (targetPlayer != null)
                         {
                             var formattedTargetBal = plugin.FormatMoney(result.ToNewBalance);
-                            UnturnedChat.Say(targetPlayer, plugin.Translate("pay_received", formattedAmount, fromName, formattedTargetBal), UnityEngine.Color.green);
+                            KizChat.Say(targetPlayer, plugin.Translate("pay_received", formattedAmount, fromName, formattedTargetBal), UnityEngine.Color.green);
                         }
                     }
                     else
                     {
                         if (result.FromOldBalance < amount)
                         {
-                            UnturnedChat.Say(caller, plugin.Translate("pay_insufficient_funds", plugin.FormatMoney(amount)), UnityEngine.Color.red);
+                            KizChat.Say(caller, plugin.Translate("pay_insufficient_funds", plugin.FormatMoney(amount)), UnityEngine.Color.red);
                         }
                         else
                         {
-                            UnturnedChat.Say(caller, plugin.Translate("pay_receiver_max_balance", targetName), UnityEngine.Color.red);
+                            KizChat.Say(caller, plugin.Translate("pay_receiver_max_balance", targetName), UnityEngine.Color.red);
                         }
                     }
                 });

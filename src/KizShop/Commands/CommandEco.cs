@@ -26,7 +26,7 @@ namespace KizShop.Commands
                 if (command.Length < 3)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -36,7 +36,7 @@ namespace KizShop.Commands
                 if (!decimal.TryParse(command[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var rawAmount))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red));
                     return;
                 }
 
@@ -53,7 +53,7 @@ namespace KizShop.Commands
                     if (parsedId < 76561197960265728ul || parsedId > 76561202255233023ul)
                     {
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            UnturnedChat.Say(caller, plugin.Translate("invalid_steamid"), UnityEngine.Color.red));
+                            KizChat.Say(caller, plugin.Translate("invalid_steamid"), UnityEngine.Color.red));
                         return;
                     }
                     targetSteamId = parsedId;
@@ -62,7 +62,7 @@ namespace KizShop.Commands
                 if (targetSteamId == 0)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", targetArg), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("balance_player_not_found", targetArg), UnityEngine.Color.red));
                     return;
                 }
 
@@ -74,7 +74,7 @@ namespace KizShop.Commands
                         if (!Money.TryFromDecimal(rawAmount, maxTx, out var giveMoney, out var giveErr))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("invalid_money_amount", giveErr), UnityEngine.Color.red));
+                                KizChat.Say(caller, plugin.Translate("invalid_money_amount", giveErr), UnityEngine.Color.red));
                             return;
                         }
 
@@ -87,7 +87,7 @@ namespace KizShop.Commands
                         plugin.Dispatcher.QueueOnMainThread(() =>
                         {
                             var formattedBal = plugin.FormatMoney(depRes.NewBalance);
-                            UnturnedChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
+                            KizChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
                         });
                         break;
 
@@ -95,7 +95,7 @@ namespace KizShop.Commands
                         if (!Money.TryFromDecimal(rawAmount, maxTx, out var takeMoney, out var takeErr))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("invalid_money_amount", takeErr), UnityEngine.Color.red));
+                                KizChat.Say(caller, plugin.Translate("invalid_money_amount", takeErr), UnityEngine.Color.red));
                             return;
                         }
 
@@ -113,12 +113,12 @@ namespace KizShop.Commands
                             if (withRes.Success)
                             {
                                 var formattedBal = plugin.FormatMoney(withRes.NewBalance);
-                                UnturnedChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
+                                KizChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
                             }
                             else
                             {
                                 var currentBal = plugin.FormatMoney(withRes.OldBalance);
-                                UnturnedChat.Say(caller, plugin.Translate("eco_insufficient_funds", targetName, currentBal), UnityEngine.Color.red);
+                                KizChat.Say(caller, plugin.Translate("eco_insufficient_funds", targetName, currentBal), UnityEngine.Color.red);
                             }
                         });
                         break;
@@ -127,7 +127,7 @@ namespace KizShop.Commands
                         if (!Money.TryFromDecimalAllowZero(rawAmount, out var setMoney, out var setErr))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
-                                UnturnedChat.Say(caller, plugin.Translate("invalid_money_amount", setErr), UnityEngine.Color.red));
+                                KizChat.Say(caller, plugin.Translate("invalid_money_amount", setErr), UnityEngine.Color.red));
                             return;
                         }
 
@@ -140,13 +140,13 @@ namespace KizShop.Commands
                         plugin.Dispatcher.QueueOnMainThread(() =>
                         {
                             var formattedBal = plugin.FormatMoney(setMoney);
-                            UnturnedChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
+                            KizChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
                         });
                         break;
 
                     default:
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            UnturnedChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
+                            KizChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
                         break;
                 }
             });

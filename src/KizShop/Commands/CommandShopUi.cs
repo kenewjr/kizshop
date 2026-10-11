@@ -22,7 +22,16 @@ namespace KizShop.Commands
                 var plugin = KizShopPlugin.Instance;
                 if (plugin?.ShopUi == null) return;
 
-                await plugin.ShopUi.OpenShopAsync(unturnedPlayer.CSteamID.m_SteamID).ConfigureAwait(false);
+                bool opened = await plugin.ShopUi.OpenShopAsync(unturnedPlayer.CSteamID.m_SteamID).ConfigureAwait(false);
+                if (!opened)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                    {
+                        ushort effectId = plugin.Configuration.Instance.UIEffectId;
+                        KizChat.Say(caller, $"<color=red>Visual UI effect (ID: {effectId}) is not installed on this server.</color>", UnityEngine.Color.red);
+                        KizChat.Say(caller, "<color=yellow>Use chat commands instead: /shop, /buy, /sell, /cost</color>", UnityEngine.Color.yellow);
+                    });
+                }
             });
         }
     }

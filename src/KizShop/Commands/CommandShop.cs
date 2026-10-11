@@ -27,8 +27,8 @@ namespace KizShop.Commands
                     plugin.Configuration.Instance.EnableVisualUI &&
                     plugin.ShopUi != null)
                 {
-                    await plugin.ShopUi.OpenShopAsync(uPlayer.CSteamID.m_SteamID).ConfigureAwait(false);
-                    return;
+                    bool opened = await plugin.ShopUi.OpenShopAsync(uPlayer.CSteamID.m_SteamID).ConfigureAwait(false);
+                    if (opened) return;
                 }
 
                 int page = 1;
@@ -44,15 +44,15 @@ namespace KizShop.Commands
 
                 plugin.Dispatcher.QueueOnMainThread(() =>
                 {
-                    UnturnedChat.Say(caller, plugin.Translate("shop_header", page, totalPages), UnityEngine.Color.cyan);
+                    KizChat.Say(caller, plugin.Translate("shop_header", page, totalPages), UnityEngine.Color.cyan);
                     foreach (var item in entries)
                     {
                         string buyStr = item.CanBuy ? plugin.FormatMoney(Money.FromDecimal(item.BuyPrice)) : plugin.Translate("cost_not_available");
                         string sellStr = item.CanSell && item.SellPrice.HasValue ? plugin.FormatMoney(Money.FromDecimal(item.SellPrice.Value)) : plugin.Translate("cost_not_available");
 
-                        UnturnedChat.Say(caller, plugin.Translate("shop_item_entry", item.Name, item.Id, buyStr, sellStr), UnityEngine.Color.white);
+                        KizChat.Say(caller, plugin.Translate("shop_item_entry", item.Name, item.Id, buyStr, sellStr), UnityEngine.Color.white);
                     }
-                    UnturnedChat.Say(caller, plugin.Translate("shop_footer"), UnityEngine.Color.gray);
+                    KizChat.Say(caller, plugin.Translate("shop_footer"), UnityEngine.Color.gray);
                 });
 
                 await Task.CompletedTask;

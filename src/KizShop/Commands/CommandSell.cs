@@ -26,7 +26,7 @@ namespace KizShop.Commands
                 if (command.Length < 1)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        UnturnedChat.Say(caller, plugin.Translate("sell_usage"), UnityEngine.Color.yellow));
+                        KizChat.Say(caller, plugin.Translate("sell_usage"), UnityEngine.Color.yellow));
                     return;
                 }
 
@@ -46,16 +46,16 @@ namespace KizShop.Commands
                     {
                         var payoutStr = plugin.FormatMoney(result.Price);
                         var balStr = plugin.FormatMoney(result.NewBalance);
-                        UnturnedChat.Say(caller, plugin.Translate("sell_success", result.Quantity, result.ItemEntry.Name, payoutStr, balStr), UnityEngine.Color.green);
+                        KizChat.Say(caller, plugin.Translate("sell_success", result.Quantity, result.ItemEntry.Name, payoutStr, balStr), UnityEngine.Color.green);
                     }
                     else if (result.CandidateNames != null && result.CandidateNames.Count > 0)
                     {
                         string candidates = string.Join(", ", result.CandidateNames);
-                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow);
+                        KizChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow);
                     }
                     else
                     {
-                        UnturnedChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
+                        KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
                     }
                 });
             });

@@ -370,7 +370,7 @@ namespace KizShop
                 Dispatcher.QueueOnMainThread(() =>
                 {
                     var formatted = FormatMoney(reward);
-                    UnturnedChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
+                    KizChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
                 });
             });
         }
@@ -408,7 +408,7 @@ namespace KizShop
                 Dispatcher.QueueOnMainThread(() =>
                 {
                     var formatted = FormatMoney(reward);
-                    UnturnedChat.Say(player, Translate(key, formatted), UnityEngine.Color.green);
+                    KizChat.Say(player, Translate(key, formatted), UnityEngine.Color.green);
                 });
             });
         }
@@ -471,7 +471,7 @@ namespace KizShop
                             if (uPlayer != null)
                             {
                                 var formatted = FormatMoney(amount);
-                                UnturnedChat.Say(uPlayer, Translate("reward_playtime", formatted), UnityEngine.Color.green);
+                                KizChat.Say(uPlayer, Translate("reward_playtime", formatted), UnityEngine.Color.green);
                             }
                         });
                     }

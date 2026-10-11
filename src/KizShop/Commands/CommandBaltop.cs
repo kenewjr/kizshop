@@ -30,11 +30,11 @@ namespace KizShop.Commands
                 {
                     if (list == null || list.Count == 0)
                     {
-                        UnturnedChat.Say(caller, plugin.Translate("baltop_empty"), UnityEngine.Color.yellow);
+                        KizChat.Say(caller, plugin.Translate("baltop_empty"), UnityEngine.Color.yellow);
                         return;
                     }
 
-                    UnturnedChat.Say(caller, plugin.Translate("baltop_header", list.Count), UnityEngine.Color.cyan);
+                    KizChat.Say(caller, plugin.Translate("baltop_header", list.Count), UnityEngine.Color.cyan);
                     for (int i = 0; i < list.Count; i++)
                     {
                         var entry = list[i];
@@ -46,7 +46,7 @@ namespace KizShop.Commands
                         }
 
                         var formatted = plugin.FormatMoney(entry.Balance);
-                        UnturnedChat.Say(caller, plugin.Translate("baltop_entry", i + 1, displayName, formatted), UnityEngine.Color.white);
+                        KizChat.Say(caller, plugin.Translate("baltop_entry", i + 1, displayName, formatted), UnityEngine.Color.white);
                     }
                 });
             });
