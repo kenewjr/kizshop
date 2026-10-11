@@ -88,29 +88,14 @@ namespace KizShop.Shop
             byte maxStack = asset.amount > 0 ? asset.amount : (byte)1;
 
             int stacksNeeded = (int)Math.Ceiling((double)count / maxStack);
+            if (stacksNeeded <= 0) return true;
 
-            // Verify if space exists
-            int freeSlotsFound = 0;
-            var pages = inventory.items;
-            if (pages == null) return false;
-
-            for (byte page = 0; page < pages.Length; page++)
+            if (stacksNeeded == 1)
             {
-                // Only storage pages can take arbitrary items
-                var pageItems = pages[page];
-                if (pageItems == null) continue;
-
-                if (pageItems.tryFindSpace(sizeX, sizeY, out _, out _, out _))
-                {
-                    freeSlotsFound++;
-                    if (freeSlotsFound >= stacksNeeded)
-                    {
-                        return true;
-                    }
-                }
+                return inventory.tryFindSpace(sizeX, sizeY, out _, out _, out _, out _);
             }
 
-            return freeSlotsFound > 0;
+            return Gateways.UnturnedInventoryGateway.CheckMultiStackSpace(inventory, sizeX, sizeY, stacksNeeded);
         }
     }
 }

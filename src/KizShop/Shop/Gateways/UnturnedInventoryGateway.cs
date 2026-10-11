@@ -8,13 +8,16 @@ namespace KizShop.Shop.Gateways
 {
     public class UnturnedInventoryGateway : IInventoryGateway
     {
-        private static readonly byte[] GearPages = new byte[]
+        public static readonly byte[] StoragePages = new byte[]
         {
+            PlayerInventory.SLOTS,    // 2 (Hands / base player inventory grid)
             PlayerInventory.BACKPACK, // 3
             PlayerInventory.VEST,     // 4
             PlayerInventory.SHIRT,    // 5
             PlayerInventory.PANTS     // 6
         };
+
+        private static readonly byte[] GearPages = StoragePages;
 
         public List<InventoryItemInstance> GetGearItems(ulong steamId, ushort itemId)
         {
@@ -25,7 +28,7 @@ namespace KizShop.Shop.Gateways
             var inv = player.Inventory;
             var equipment = player.Player.equipment;
 
-            foreach (byte page in GearPages)
+            foreach (byte page in StoragePages)
             {
                 if (page >= inv.items.Length || inv.items[page] == null) continue;
 
@@ -93,20 +96,148 @@ namespace KizShop.Shop.Gateways
             byte sizeY = asset.size_y;
             byte maxStack = asset.amount > 0 ? asset.amount : (byte)1;
             int stacksNeeded = (int)Math.Ceiling((double)count / maxStack);
+            if (stacksNeeded <= 0) return true;
 
-            int availableSlots = 0;
             var inv = player.Inventory;
-            foreach (byte page in GearPages)
+
+            // Fast path for 1 stack: native Unturned tryFindSpace across all valid storage pages (SLOTS..PAGES-2)
+            if (stacksNeeded == 1)
+            {
+                if (inv.tryFindSpace(sizeX, sizeY, out _, out _, out _, out _))
+                {
+                    return true;
+                }
+
+                // Check auto-equip weapon into empty primary/secondary
+                if (asset is ItemWeaponAsset weaponAsset)
+                {
+                    if (weaponAsset.slot == ESlotType.PRIMARY && (inv.items[0] == null || inv.items[0].getItemCount() == 0)) return true;
+                    if (weaponAsset.slot == ESlotType.SECONDARY && (inv.items[1] == null || inv.items[1].getItemCount() == 0)) return true;
+                    if (weaponAsset.slot == ESlotType.ANY && ((inv.items[0] == null || inv.items[0].getItemCount() == 0) || (inv.items[1] == null || inv.items[1].getItemCount() == 0))) return true;
+                }
+
+                // Check auto-equip clothing into empty clothing slot
+                var clothing = player.Player.clothing;
+                if (clothing != null && asset is ItemClothingAsset clothingAsset)
+                {
+                    if (clothingAsset.type == EItemType.BACKPACK && clothing.backpack == 0) return true;
+                    if (clothingAsset.type == EItemType.VEST && clothing.vest == 0) return true;
+                    if (clothingAsset.type == EItemType.SHIRT && clothing.shirt == 0) return true;
+                    if (clothingAsset.type == EItemType.PANTS && clothing.pants == 0) return true;
+                    if (clothingAsset.type == EItemType.HAT && clothing.hat == 0) return true;
+                    if (clothingAsset.type == EItemType.MASK && clothing.mask == 0) return true;
+                    if (clothingAsset.type == EItemType.GLASSES && clothing.glasses == 0) return true;
+                }
+
+                return false;
+            }
+
+            // Multi-stack check: simulate placement across all storage pages (Hands, Backpack, Vest, Shirt, Pants)
+            return CheckMultiStackSpace(inv, sizeX, sizeY, stacksNeeded);
+        }
+
+        public static bool CheckMultiStackSpace(PlayerInventory inv, byte sizeX, byte sizeY, int stacksNeeded)
+        {
+            if (stacksNeeded <= 0) return true;
+            if (ReferenceEquals(inv, null) || inv.items == null) return false;
+
+            int remaining = stacksNeeded;
+
+            foreach (byte page in StoragePages)
             {
                 if (page >= inv.items.Length || inv.items[page] == null) continue;
-                if (inv.items[page].tryFindSpace(sizeX, sizeY, out _, out _, out _))
+
+                var pageItems = inv.items[page];
+                byte w = pageItems.width;
+                byte h = pageItems.height;
+                if (w == 0 || h == 0) continue;
+
+                // Build occupancy grid for this page
+                bool[,] grid = new bool[w, h];
+                byte itemCount = pageItems.getItemCount();
+                for (byte i = 0; i < itemCount; i++)
                 {
-                    availableSlots++;
-                    if (availableSlots >= stacksNeeded) return true;
+                    var jar = pageItems.getItem(i);
+                    if (jar == null) continue;
+
+                    for (int x = jar.x; x < jar.x + jar.size_x && x < w; x++)
+                    {
+                        for (int y = jar.y; y < jar.y + jar.size_y && y < h; y++)
+                        {
+                            grid[x, y] = true;
+                        }
+                    }
+                }
+
+                // Simulate placing items on this page
+                while (remaining > 0)
+                {
+                    bool placed = false;
+
+                    // Unrotated
+                    for (int y = 0; y <= h - sizeY && !placed; y++)
+                    {
+                        for (int x = 0; x <= w - sizeX && !placed; x++)
+                        {
+                            if (CanPlace(grid, x, y, sizeX, sizeY))
+                            {
+                                Place(grid, x, y, sizeX, sizeY);
+                                placed = true;
+                                remaining--;
+                                if (remaining <= 0) return true;
+                            }
+                        }
+                    }
+
+                    // Rotated (if not square)
+                    if (!placed && sizeX != sizeY)
+                    {
+                        for (int y = 0; y <= h - sizeX && !placed; y++)
+                        {
+                            for (int x = 0; x <= w - sizeY && !placed; x++)
+                            {
+                                if (CanPlace(grid, x, y, sizeY, sizeX))
+                                {
+                                    Place(grid, x, y, sizeY, sizeX);
+                                    placed = true;
+                                    remaining--;
+                                    if (remaining <= 0) return true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (!placed)
+                    {
+                        break;
+                    }
                 }
             }
 
-            return availableSlots >= stacksNeeded;
+            return remaining <= 0;
+        }
+
+        private static bool CanPlace(bool[,] grid, int startX, int startY, byte sizeX, byte sizeY)
+        {
+            for (int x = startX; x < startX + sizeX; x++)
+            {
+                for (int y = startY; y < startY + sizeY; y++)
+                {
+                    if (grid[x, y]) return false;
+                }
+            }
+            return true;
+        }
+
+        private static void Place(bool[,] grid, int startX, int startY, byte sizeX, byte sizeY)
+        {
+            for (int x = startX; x < startX + sizeX; x++)
+            {
+                for (int y = startY; y < startY + sizeY; y++)
+                {
+                    grid[x, y] = true;
+                }
+            }
         }
 
         public bool TryAddItem(ulong steamId, Item item)

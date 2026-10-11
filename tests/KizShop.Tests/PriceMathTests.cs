@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using Xunit;
 using KizShop.Shop.Models;
 
@@ -16,10 +18,10 @@ namespace KizShop.Tests
                 Enabled = true
             };
 
-            int quantity = 7;
+            int quantity = 3;
             decimal total = entry.BuyPrice * quantity;
 
-            Assert.Equal(139.93m, total);
+            Assert.Equal(59.97m, total);
         }
 
         [Fact]

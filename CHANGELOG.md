@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-10-11
+
+### Fixed
+- **Inventory Space Check (`CheckSpace`)**:
+  - Added `PlayerInventory.SLOTS` (Page 2: "Hands" / base player inventory grid) to `StoragePages`. Naked players or players without equipped backpacks/vests are no longer falsely rejected with "Not enough inventory space" when their hands inventory is empty.
+  - Fixed multi-stack purchasing: replaced page-counting logic with exact 2D grid placement simulation with rotation support, allowing multi-item purchases (`/buy <item> <amount>`) to properly fill available storage slots.
+  - Included Page 2 in `GetGearItems` so items stored in hands inventory can be sold via `/sell`.
+
 ## [0.2.1] - 2026-10-11
 
 ### Fixed
