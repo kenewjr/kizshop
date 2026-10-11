@@ -1,6 +1,9 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Rocket.API;
 using Rocket.Unturned.Chat;
+using KizShop.Common;
+using KizShop.Shop;
 
 namespace KizShop.Commands
 {
@@ -15,37 +18,64 @@ namespace KizShop.Commands
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
-            var plugin = KizShopPlugin.Instance;
-            if (plugin == null || plugin.Shop == null) return;
-
-            if (command.Length < 1)
+            CommandRunner.Run(caller, async () =>
             {
-                UnturnedChat.Say(caller, plugin.Translate("cost_usage"), UnityEngine.Color.yellow);
-                return;
-            }
+                var plugin = KizShopPlugin.Instance;
 
-            string query = command[0];
-            var itemEntry = plugin.Shop.FindItem(query);
-            if (itemEntry != null)
-            {
-                string buyStr = itemEntry.CanBuy ? plugin.FormatMoney(itemEntry.BuyPrice) : plugin.Translate("cost_not_available");
-                string sellStr = itemEntry.CanSell && itemEntry.SellPrice.HasValue ? plugin.FormatMoney(itemEntry.SellPrice.Value) : plugin.Translate("cost_not_available");
+                if (command.Length < 1)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("cost_usage"), UnityEngine.Color.yellow));
+                    return;
+                }
 
-                UnturnedChat.Say(caller, plugin.Translate("cost_item_info", itemEntry.Name, itemEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan);
-                return;
-            }
+                string query = command[0];
+                var itemLookup = plugin.Shop.ResolveItem(query);
 
-            var vehEntry = plugin.Shop.FindVehicle(query);
-            if (vehEntry != null)
-            {
-                string buyStr = vehEntry.CanBuy ? plugin.FormatMoney(vehEntry.BuyPrice) : plugin.Translate("cost_not_available");
-                string sellStr = vehEntry.CanSell && vehEntry.SellPrice.HasValue ? plugin.FormatMoney(vehEntry.SellPrice.Value) : plugin.Translate("cost_not_available");
+                if (itemLookup.Status == LookupStatus.Ambiguous)
+                {
+                    string candidates = string.Join(", ", itemLookup.CandidateNames);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow));
+                    return;
+                }
 
-                UnturnedChat.Say(caller, plugin.Translate("cost_item_info", vehEntry.Name, vehEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan);
-                return;
-            }
+                if (itemLookup.Status == LookupStatus.Found)
+                {
+                    var itemEntry = itemLookup.Entry;
+                    string buyStr = itemEntry.CanBuy ? plugin.FormatMoney(Money.FromDecimal(itemEntry.BuyPrice)) : plugin.Translate("cost_not_available");
+                    string sellStr = itemEntry.CanSell && itemEntry.SellPrice.HasValue ? plugin.FormatMoney(Money.FromDecimal(itemEntry.SellPrice.Value)) : plugin.Translate("cost_not_available");
 
-            UnturnedChat.Say(caller, plugin.Translate("cost_not_found", query), UnityEngine.Color.red);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("cost_item_info", itemEntry.Name, itemEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan));
+                    return;
+                }
+
+                var vehLookup = plugin.Shop.ResolveVehicle(query);
+                if (vehLookup.Status == LookupStatus.Ambiguous)
+                {
+                    string candidates = string.Join(", ", vehLookup.CandidateNames);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow));
+                    return;
+                }
+
+                if (vehLookup.Status == LookupStatus.Found)
+                {
+                    var vehEntry = vehLookup.Entry;
+                    string buyStr = vehEntry.CanBuy ? plugin.FormatMoney(Money.FromDecimal(vehEntry.BuyPrice)) : plugin.Translate("cost_not_available");
+                    string sellStr = vehEntry.CanSell && vehEntry.SellPrice.HasValue ? plugin.FormatMoney(Money.FromDecimal(vehEntry.SellPrice.Value)) : plugin.Translate("cost_not_available");
+
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("cost_item_info", vehEntry.Name, vehEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan));
+                    return;
+                }
+
+                plugin.Dispatcher.QueueOnMainThread(() =>
+                    UnturnedChat.Say(caller, plugin.Translate("cost_not_found", query), UnityEngine.Color.red));
+
+                await Task.CompletedTask;
+            });
         }
     }
 }

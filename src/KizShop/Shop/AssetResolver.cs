@@ -7,90 +7,130 @@ namespace KizShop.Shop
 {
     public static class AssetResolver
     {
-        public static ItemShopEntry FindItemEntry(IEnumerable<ItemShopEntry> entries, string query)
+        public static LookupResult<ItemShopEntry> ResolveItem(IEnumerable<ItemShopEntry> entries, string query, bool enabledOnly = false)
         {
             if (entries == null || string.IsNullOrWhiteSpace(query))
             {
-                return null;
+                return LookupResult<ItemShopEntry>.NotFound();
             }
 
+            var pool = enabledOnly ? entries.Where(e => e.Enabled).ToList() : entries.ToList();
             query = query.Trim();
 
-            // 1. Check numeric ID
+            // 1. Numeric ID
             if (ushort.TryParse(query, out var id))
             {
-                var matchById = entries.FirstOrDefault(e => e.Id == id);
-                if (matchById != null) return matchById;
+                var matchById = pool.FirstOrDefault(e => e.Id == id);
+                if (matchById != null) return LookupResult<ItemShopEntry>.Success(matchById);
             }
 
-            // 2. Check GUID
+            // 2. GUID
             if (Guid.TryParse(query, out var guid))
             {
                 var guidStr = guid.ToString("N");
                 var guidHyphen = guid.ToString("D");
-                var matchByGuid = entries.FirstOrDefault(e =>
+                var matchByGuid = pool.FirstOrDefault(e =>
                     !string.IsNullOrEmpty(e.Guid) &&
                     (string.Equals(e.Guid, guidStr, StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(e.Guid, guidHyphen, StringComparison.OrdinalIgnoreCase)));
-                if (matchByGuid != null) return matchByGuid;
+                if (matchByGuid != null) return LookupResult<ItemShopEntry>.Success(matchByGuid);
             }
 
             // 3. Exact name match (case-insensitive)
-            var exactName = entries.FirstOrDefault(e =>
+            var exactName = pool.FirstOrDefault(e =>
                 string.Equals(e.Name, query, StringComparison.OrdinalIgnoreCase));
-            if (exactName != null) return exactName;
+            if (exactName != null) return LookupResult<ItemShopEntry>.Success(exactName);
 
-            // 4. Starts with name match
-            var startsWithName = entries.FirstOrDefault(e =>
-                e.Name != null && e.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase));
-            if (startsWithName != null) return startsWithName;
+            // 4. Prefix match
+            var prefixMatches = pool.Where(e =>
+                e.Name != null && e.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            // 5. Contains name match
-            return entries.FirstOrDefault(e =>
-                e.Name != null && e.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (prefixMatches.Count == 1)
+            {
+                return LookupResult<ItemShopEntry>.Success(prefixMatches[0]);
+            }
+            if (prefixMatches.Count > 1)
+            {
+                return LookupResult<ItemShopEntry>.Ambiguous(prefixMatches.Take(5).Select(e => e.Name).ToList());
+            }
+
+            // 5. Contains match
+            var containsMatches = pool.Where(e =>
+                e.Name != null && e.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+            if (containsMatches.Count == 1)
+            {
+                return LookupResult<ItemShopEntry>.Success(containsMatches[0]);
+            }
+            if (containsMatches.Count > 1)
+            {
+                return LookupResult<ItemShopEntry>.Ambiguous(containsMatches.Take(5).Select(e => e.Name).ToList());
+            }
+
+            return LookupResult<ItemShopEntry>.NotFound();
         }
 
-        public static VehicleShopEntry FindVehicleEntry(IEnumerable<VehicleShopEntry> entries, string query)
+        public static LookupResult<VehicleShopEntry> ResolveVehicle(IEnumerable<VehicleShopEntry> entries, string query, bool enabledOnly = false)
         {
             if (entries == null || string.IsNullOrWhiteSpace(query))
             {
-                return null;
+                return LookupResult<VehicleShopEntry>.NotFound();
             }
 
+            var pool = enabledOnly ? entries.Where(e => e.Enabled).ToList() : entries.ToList();
             query = query.Trim();
 
-            // 1. Check numeric ID
+            // 1. Numeric ID
             if (ushort.TryParse(query, out var id))
             {
-                var matchById = entries.FirstOrDefault(e => e.Id == id);
-                if (matchById != null) return matchById;
+                var matchById = pool.FirstOrDefault(e => e.Id == id);
+                if (matchById != null) return LookupResult<VehicleShopEntry>.Success(matchById);
             }
 
-            // 2. Check GUID
+            // 2. GUID
             if (Guid.TryParse(query, out var guid))
             {
                 var guidStr = guid.ToString("N");
                 var guidHyphen = guid.ToString("D");
-                var matchByGuid = entries.FirstOrDefault(e =>
+                var matchByGuid = pool.FirstOrDefault(e =>
                     !string.IsNullOrEmpty(e.Guid) &&
                     (string.Equals(e.Guid, guidStr, StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(e.Guid, guidHyphen, StringComparison.OrdinalIgnoreCase)));
-                if (matchByGuid != null) return matchByGuid;
+                if (matchByGuid != null) return LookupResult<VehicleShopEntry>.Success(matchByGuid);
             }
 
             // 3. Exact name match
-            var exactName = entries.FirstOrDefault(e =>
+            var exactName = pool.FirstOrDefault(e =>
                 string.Equals(e.Name, query, StringComparison.OrdinalIgnoreCase));
-            if (exactName != null) return exactName;
+            if (exactName != null) return LookupResult<VehicleShopEntry>.Success(exactName);
 
-            // 4. Starts with name match
-            var startsWithName = entries.FirstOrDefault(e =>
-                e.Name != null && e.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase));
-            if (startsWithName != null) return startsWithName;
+            // 4. Prefix match
+            var prefixMatches = pool.Where(e =>
+                e.Name != null && e.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            // 5. Contains name match
-            return entries.FirstOrDefault(e =>
-                e.Name != null && e.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (prefixMatches.Count == 1)
+            {
+                return LookupResult<VehicleShopEntry>.Success(prefixMatches[0]);
+            }
+            if (prefixMatches.Count > 1)
+            {
+                return LookupResult<VehicleShopEntry>.Ambiguous(prefixMatches.Take(5).Select(e => e.Name).ToList());
+            }
+
+            // 5. Contains match
+            var containsMatches = pool.Where(e =>
+                e.Name != null && e.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+            if (containsMatches.Count == 1)
+            {
+                return LookupResult<VehicleShopEntry>.Success(containsMatches[0]);
+            }
+            if (containsMatches.Count > 1)
+            {
+                return LookupResult<VehicleShopEntry>.Ambiguous(containsMatches.Take(5).Select(e => e.Name).ToList());
+            }
+
+            return LookupResult<VehicleShopEntry>.NotFound();
         }
     }
 }

@@ -1,9 +1,9 @@
-using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Rocket.API;
-using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
+using KizShop.Common;
 
 namespace KizShop.Commands
 {
@@ -18,16 +18,15 @@ namespace KizShop.Commands
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
-            var plugin = KizShopPlugin.Instance;
-            if (plugin == null || plugin.Economy == null) return;
-
-            int count = plugin.Configuration.Instance.BaltopCount;
-            if (count <= 0) count = 10;
-
-            _ = plugin.Economy.GetTopBalancesAsync(count).ContinueWith(t =>
+            CommandRunner.Run(caller, async () =>
             {
-                var list = t.Result;
-                TaskDispatcher.QueueOnMainThread(() =>
+                var plugin = KizShopPlugin.Instance;
+                int count = plugin.Configuration.Instance.BaltopCount;
+                if (count <= 0) count = 10;
+
+                var list = await plugin.Economy.GetTopBalancesAsync(count).ConfigureAwait(false);
+
+                plugin.Dispatcher.QueueOnMainThread(() =>
                 {
                     if (list == null || list.Count == 0)
                     {

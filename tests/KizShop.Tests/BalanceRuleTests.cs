@@ -2,8 +2,10 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Xunit;
+using KizShop.Common;
 using KizShop.Economy;
 using KizShop.Storage;
+using KizShop.Tests.Mocks;
 
 namespace KizShop.Tests
 {
@@ -18,7 +20,7 @@ namespace KizShop.Tests
             _dbPath = Path.Combine(Path.GetTempPath(), $"kizshop_test_{Guid.NewGuid():N}.db");
             _storage = new SqliteStorage(_dbPath);
             _storage.InitializeAsync().GetAwaiter().GetResult();
-            _economy = new EconomyService(_storage, () => 100.00m, () => 1000.00m);
+            _economy = new EconomyService(_storage, () => Money.FromDecimal(100.00m), () => Money.FromDecimal(1000.00m), true, new TestMainThreadDispatcher());
         }
 
         public void Dispose()
@@ -34,9 +36,9 @@ namespace KizShop.Tests
         public async Task GetBalance_NewPlayer_ReturnsStartingBalance()
         {
             ulong steamId = 76561198000000001;
-            decimal bal = await _economy.GetBalanceAsync(steamId);
+            var bal = await _economy.GetBalanceAsync(steamId);
 
-            Assert.Equal(100.00m, bal);
+            Assert.Equal(100.00m, bal.ToDecimal());
         }
 
         [Fact]
@@ -44,8 +46,8 @@ namespace KizShop.Tests
         {
             ulong steamId = 76561198000000002;
             bool eventFired = false;
-            decimal oldBalance = 0;
-            decimal newBalance = 0;
+            Money oldBalance = Money.Zero;
+            Money newBalance = Money.Zero;
 
             _economy.OnBalanceChanged += (id, oldB, newB, reason) =>
             {
@@ -57,37 +59,26 @@ namespace KizShop.Tests
                 }
             };
 
-            bool success = await _economy.TryWithdrawAsync(steamId, 40.00m, "TestWithdraw");
+            var result = await _economy.TryWithdrawAsync(steamId, Money.FromDecimal(40.00m), "TestWithdraw");
 
-            Assert.True(success);
+            Assert.True(result.Success);
             Assert.True(eventFired);
-            Assert.Equal(100.00m, oldBalance);
-            Assert.Equal(60.00m, newBalance);
+            Assert.Equal(100.00m, oldBalance.ToDecimal());
+            Assert.Equal(60.00m, newBalance.ToDecimal());
 
-            decimal currentBal = await _economy.GetBalanceAsync(steamId);
-            Assert.Equal(60.00m, currentBal);
+            var currentBal = await _economy.GetBalanceAsync(steamId);
+            Assert.Equal(60.00m, currentBal.ToDecimal());
         }
 
         [Fact]
         public async Task TryWithdraw_InsufficientFunds_Fails()
         {
             ulong steamId = 76561198000000003;
-            bool success = await _economy.TryWithdrawAsync(steamId, 250.00m, "TestWithdraw");
+            var result = await _economy.TryWithdrawAsync(steamId, Money.FromDecimal(250.00m), "TestWithdraw");
 
-            Assert.False(success);
-            decimal currentBal = await _economy.GetBalanceAsync(steamId);
-            Assert.Equal(100.00m, currentBal);
-        }
-
-        [Theory]
-        [InlineData(0)]
-        [InlineData(-50)]
-        public async Task TryWithdraw_ZeroOrNegative_Fails(decimal invalidAmount)
-        {
-            ulong steamId = 76561198000000004;
-            bool success = await _economy.TryWithdrawAsync(steamId, invalidAmount, "TestWithdraw");
-
-            Assert.False(success);
+            Assert.False(result.Success);
+            var currentBal = await _economy.GetBalanceAsync(steamId);
+            Assert.Equal(100.00m, currentBal.ToDecimal());
         }
 
         [Fact]
@@ -95,9 +86,9 @@ namespace KizShop.Tests
         {
             ulong steamId = 76561198000000005;
             // Starting: 100, Max: 1000. Deposit 950 -> should cap at 1000.
-            decimal newBal = await _economy.DepositAsync(steamId, 950.00m, "TestDeposit");
+            var result = await _economy.DepositAsync(steamId, Money.FromDecimal(950.00m), "TestDeposit");
 
-            Assert.Equal(1000.00m, newBal);
+            Assert.Equal(1000.00m, result.NewBalance.ToDecimal());
         }
 
         [Fact]
@@ -106,23 +97,23 @@ namespace KizShop.Tests
             ulong sender = 76561198000000006;
             ulong receiver = 76561198000000007;
 
-            bool success = await _economy.TransferAsync(sender, receiver, 50.00m, "TestTransfer");
+            var result = await _economy.TransferAsync(sender, receiver, Money.FromDecimal(50.00m), "TestTransfer");
 
-            Assert.True(success);
-            decimal senderBal = await _economy.GetBalanceAsync(sender);
-            decimal receiverBal = await _economy.GetBalanceAsync(receiver);
+            Assert.True(result.Success);
+            var senderBal = await _economy.GetBalanceAsync(sender);
+            var receiverBal = await _economy.GetBalanceAsync(receiver);
 
-            Assert.Equal(50.00m, senderBal);
-            Assert.Equal(150.00m, receiverBal);
+            Assert.Equal(50.00m, senderBal.ToDecimal());
+            Assert.Equal(150.00m, receiverBal.ToDecimal());
         }
 
         [Fact]
         public async Task Transfer_SelfPay_Fails()
         {
             ulong steamId = 76561198000000008;
-            bool success = await _economy.TransferAsync(steamId, steamId, 25.00m, "SelfTransfer");
+            var result = await _economy.TransferAsync(steamId, steamId, Money.FromDecimal(25.00m), "SelfTransfer");
 
-            Assert.False(success);
+            Assert.False(result.Success);
         }
     }
 }

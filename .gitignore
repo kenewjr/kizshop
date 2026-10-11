@@ -22,3 +22,7 @@
 *.log
 [Tt]emp/
 TestResults/
+publish/
+package/
+*.zip
+*.litedb

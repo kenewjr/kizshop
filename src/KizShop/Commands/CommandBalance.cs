@@ -1,5 +1,5 @@
-using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Rocket.API;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
@@ -18,67 +18,76 @@ namespace KizShop.Commands
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
-            var plugin = KizShopPlugin.Instance;
-            if (plugin == null || plugin.Economy == null) return;
-
-            // Target someone else
-            if (command.Length >= 1)
+            CommandRunner.Run(caller, async () =>
             {
-                if (!caller.HasPermission("kizshop.balance.others") && !caller.IsAdmin)
+                var plugin = KizShopPlugin.Instance;
+
+                // Check other player
+                if (command.Length >= 1)
                 {
-                    UnturnedChat.Say(caller, plugin.Translate("balance_no_permission_others"), UnityEngine.Color.red);
+                    if (!caller.HasPermission("kizshop.balance.others") && !caller.IsAdmin)
+                    {
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            UnturnedChat.Say(caller, plugin.Translate("balance_no_permission_others"), UnityEngine.Color.red));
+                        return;
+                    }
+
+                    ulong targetSteamId = 0;
+                    string targetName = command[0];
+
+                    var targetPlayer = UnturnedPlayer.FromName(targetName);
+                    if (targetPlayer != null)
+                    {
+                        targetSteamId = targetPlayer.CSteamID.m_SteamID;
+                        targetName = targetPlayer.CharacterName;
+                    }
+                    else if (ulong.TryParse(targetName, out var parsedId))
+                    {
+                        if (parsedId < 76561197960265728ul || parsedId > 76561202255233023ul)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                UnturnedChat.Say(caller, plugin.Translate("invalid_steamid"), UnityEngine.Color.red));
+                            return;
+                        }
+
+                        bool exists = await plugin.Economy.AccountExistsAsync(parsedId).ConfigureAwait(false);
+                        if (!exists)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", targetName), UnityEngine.Color.red));
+                            return;
+                        }
+                        targetSteamId = parsedId;
+                    }
+
+                    if (targetSteamId == 0)
+                    {
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
+                        return;
+                    }
+
+                    var bal = await plugin.Economy.GetBalanceAsync(targetSteamId).ConfigureAwait(false);
+                    var formatted = plugin.FormatMoney(bal);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("balance_other", targetName, formatted), UnityEngine.Color.yellow));
                     return;
                 }
 
-                ulong targetSteamId = 0;
-                string targetName = command[0];
-
-                var targetPlayer = UnturnedPlayer.FromName(targetName);
-                if (targetPlayer != null)
+                // Check self
+                if (caller is UnturnedPlayer player)
                 {
-                    targetSteamId = targetPlayer.CSteamID.m_SteamID;
-                    targetName = targetPlayer.CharacterName;
+                    var bal = await plugin.Economy.GetBalanceAsync(player.CSteamID.m_SteamID).ConfigureAwait(false);
+                    var formatted = plugin.FormatMoney(bal);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("balance_self", formatted), UnityEngine.Color.green));
                 }
-                else if (ulong.TryParse(targetName, out var parsedId))
+                else
                 {
-                    targetSteamId = parsedId;
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("balance_usage"), UnityEngine.Color.yellow));
                 }
-
-                if (targetSteamId == 0)
-                {
-                    UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red);
-                    return;
-                }
-
-                _ = plugin.Economy.GetBalanceAsync(targetSteamId).ContinueWith(t =>
-                {
-                    var bal = t.Result;
-                    Rocket.Core.Utils.TaskDispatcher.QueueOnMainThread(() =>
-                    {
-                        var formatted = plugin.FormatMoney(bal);
-                        UnturnedChat.Say(caller, plugin.Translate("balance_other", targetName, formatted), UnityEngine.Color.yellow);
-                    });
-                });
-                return;
-            }
-
-            // Check own balance
-            if (caller is UnturnedPlayer player)
-            {
-                _ = plugin.Economy.GetBalanceAsync(player.CSteamID.m_SteamID).ContinueWith(t =>
-                {
-                    var bal = t.Result;
-                    Rocket.Core.Utils.TaskDispatcher.QueueOnMainThread(() =>
-                    {
-                        var formatted = plugin.FormatMoney(bal);
-                        UnturnedChat.Say(caller, plugin.Translate("balance_self", formatted), UnityEngine.Color.green);
-                    });
-                });
-            }
-            else
-            {
-                UnturnedChat.Say(caller, plugin.Translate("balance_usage"), UnityEngine.Color.yellow);
-            }
+            });
         }
     }
 }

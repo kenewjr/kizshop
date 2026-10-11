@@ -1,15 +1,13 @@
-using System;
-
 namespace KizShop.Common
 {
     public class TopBalanceEntry
     {
         public ulong SteamId { get; set; }
-        public decimal Balance { get; set; }
+        public Money Balance { get; set; }
 
         public TopBalanceEntry() { }
 
-        public TopBalanceEntry(ulong steamId, decimal balance)
+        public TopBalanceEntry(ulong steamId, Money balance)
         {
             SteamId = steamId;
             Balance = balance;

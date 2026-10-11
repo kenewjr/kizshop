@@ -30,16 +30,26 @@ jobs:
     - name: Run unit tests
       run: dotnet test KizShop.sln --configuration Release --no-build --verbosity normal
 
-    - name: Upload KizShop.dll artifact
+    - name: Publish plugin & runtime dependencies
+      run: dotnet publish -c Release src/KizShop/KizShop.csproj -o publish/
+
+    - name: Package release zip
+      run: |
+        mkdir -p package/Plugins package/Libraries
+        cp publish/KizShop.dll package/Plugins/
+        find publish/ -maxdepth 1 -name "*.dll" ! -name "KizShop.dll" -exec cp {} package/Libraries/ \;
+        cd package && zip -r ../KizShop-Release.zip Plugins Libraries && cd ..
+
+    - name: Upload KizShop release artifact
       uses: actions/upload-artifact@v4
       with:
-        name: KizShop
-        path: src/KizShop/bin/Release/netstandard2.1/KizShop.dll
+        name: KizShop-Release
+        path: KizShop-Release.zip
 
     - name: Create GitHub Release
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v2
       with:
-        files: src/KizShop/bin/Release/netstandard2.1/KizShop.dll
+        files: KizShop-Release.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

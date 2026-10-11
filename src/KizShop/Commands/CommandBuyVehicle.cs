@@ -1,10 +1,9 @@
-using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Rocket.API;
-using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
-using SDG.Unturned;
+using KizShop.Common;
 
 namespace KizShop.Commands
 {
@@ -19,89 +18,41 @@ namespace KizShop.Commands
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
-            var plugin = KizShopPlugin.Instance;
-            if (plugin == null || plugin.Shop == null || plugin.Economy == null) return;
-
-            var player = (UnturnedPlayer)caller;
-            if (command.Length < 1)
+            CommandRunner.Run(caller, async () =>
             {
-                UnturnedChat.Say(caller, plugin.Translate("vehicle_usage"), UnityEngine.Color.yellow);
-                return;
-            }
+                var plugin = KizShopPlugin.Instance;
+                var player = (UnturnedPlayer)caller;
 
-            string query = command[0];
-            var entry = plugin.Shop.FindVehicle(query);
-            if (entry == null)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("vehicle_not_found", query), UnityEngine.Color.red);
-                return;
-            }
-
-            if (!entry.CanBuy)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("vehicle_disabled"), UnityEngine.Color.red);
-                return;
-            }
-
-            if (!string.IsNullOrEmpty(entry.Permission) && !caller.HasPermission(entry.Permission) && !caller.IsAdmin)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("vehicle_no_permission"), UnityEngine.Color.red);
-                return;
-            }
-
-            decimal cost = entry.BuyPrice;
-
-            // Check balance async
-            _ = plugin.Economy.GetBalanceAsync(player.CSteamID.m_SteamID).ContinueWith(t =>
-            {
-                var curBal = t.Result;
-                TaskDispatcher.QueueOnMainThread(async () =>
+                if (command.Length < 1)
                 {
-                    if (curBal < cost)
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("vehicle_usage"), UnityEngine.Color.yellow));
+                    return;
+                }
+
+                string query = command[0];
+                var result = await plugin.Transactions.ExecuteBuyVehicleAsync(
+                    player.CSteamID.m_SteamID,
+                    query,
+                    node => caller.HasPermission(node),
+                    caller.IsAdmin).ConfigureAwait(false);
+
+                plugin.Dispatcher.QueueOnMainThread(() =>
+                {
+                    if (result.Success)
                     {
-                        var req = plugin.FormatMoney(cost);
-                        var have = plugin.FormatMoney(curBal);
-                        UnturnedChat.Say(caller, plugin.Translate("vehicle_insufficient_funds", req, entry.Name, have), UnityEngine.Color.red);
-                        return;
+                        var costStr = plugin.FormatMoney(result.Price);
+                        UnturnedChat.Say(caller, plugin.Translate("vehicle_success", result.VehicleEntry.Name, costStr), UnityEngine.Color.green);
                     }
-
-                    // Calculate safe spawn position in front of player
-                    float spawnDistance = plugin.Configuration.Instance.VehicleSpawnDistance;
-                    if (spawnDistance <= 0) spawnDistance = 5.0f;
-
-                    var forward = player.Player.transform.forward;
-                    var spawnPos = player.Player.transform.position + (forward * spawnDistance) + new UnityEngine.Vector3(0, 1.0f, 0);
-                    var rotation = player.Player.transform.rotation;
-
-                    InteractableVehicle vehicle;
-                    try
+                    else if (result.CandidateNames != null && result.CandidateNames.Count > 0)
                     {
-                        vehicle = VehicleManager.spawnLockedVehicleForPlayerV2(entry.Id, spawnPos, rotation, player.Player);
+                        string candidates = string.Join(", ", result.CandidateNames);
+                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow);
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Rocket.Core.Logging.Logger.LogError($"[KizShop] Error spawning vehicle {entry.Id}: {ex.Message}");
-                        vehicle = null;
+                        UnturnedChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
                     }
-
-                    if (vehicle == null)
-                    {
-                        UnturnedChat.Say(caller, plugin.Translate("vehicle_spawn_failed"), UnityEngine.Color.red);
-                        return;
-                    }
-
-                    // Vehicle spawned, now deduct funds
-                    bool deducted = await plugin.Economy.TryWithdrawAsync(player.CSteamID.m_SteamID, cost, $"ShopBuyVehicle:{entry.Id}");
-                    if (!deducted)
-                    {
-                        // Rollback: destroy spawned vehicle to prevent free vehicle
-                        VehicleManager.askVehicleDestroy(vehicle);
-                        UnturnedChat.Say(caller, plugin.Translate("vehicle_spawn_failed"), UnityEngine.Color.red);
-                        return;
-                    }
-
-                    var costStr = plugin.FormatMoney(cost);
-                    UnturnedChat.Say(caller, plugin.Translate("vehicle_success", entry.Name, costStr), UnityEngine.Color.green);
                 });
             });
         }

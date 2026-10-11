@@ -1,18 +1,20 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Rocket.API.Collections;
 using Rocket.Core.Logging;
 using Rocket.Core.Plugins;
-using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Events;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
 using Steamworks;
 using KizShop.API;
+using KizShop.Common;
 using KizShop.Economy;
 using KizShop.Shop;
+using KizShop.Shop.Gateways;
 using KizShop.Storage;
 
 namespace KizShop
@@ -24,12 +26,26 @@ namespace KizShop
         public IKizStorage Storage { get; private set; }
         public EconomyService Economy { get; private set; }
         public ShopService Shop { get; private set; }
+        public ShopTransactionService Transactions { get; private set; }
+        public IMainThreadDispatcher Dispatcher { get; private set; } = new RocketMainThreadDispatcher();
 
         private CancellationTokenSource _playtimeCts;
+        private CancellationTokenSource _logPruneCts;
+
+        private readonly ConcurrentDictionary<(ulong killer, ulong victim), DateTime> _killCooldowns =
+            new ConcurrentDictionary<(ulong killer, ulong victim), DateTime>();
 
         public override TranslationList DefaultTranslations => new TranslationList
         {
             { "currency_format", "{0}{1:N2} {2}" },
+            { "plugin_offline", "<color=red>KizShop is currently offline.</color>" },
+            { "command_error_generic", "<color=red>An error occurred while processing your request. Please try again later.</color>" },
+            { "invalid_money_amount", "<color=red>Invalid amount: {0}</color>" },
+            { "invalid_steamid", "<color=red>Invalid SteamID64 specified.</color>" },
+            { "invalid_catalog_entry", "<color=red>Catalog validation error: {0}</color>" },
+            { "ambiguous_match", "<color=yellow>Multiple matches found: {0}. Please be more specific.</color>" },
+            { "transaction_in_flight", "<color=yellow>Your previous transaction is still processing. Please wait.</color>" },
+
             { "balance_self", "Your balance is <color=green>{0}</color>." },
             { "balance_other", "<color=yellow>{0}</color>'s balance is <color=green>{1}</color>." },
             { "balance_player_not_found", "<color=red>Player '{0}' was not found.</color>" },
@@ -50,8 +66,10 @@ namespace KizShop
 
             { "eco_usage", "Usage: /eco <give|take|set> <player|steamid> <amount>" },
             { "eco_success", "<color=green>Updated {0}'s balance. New balance: {1}.</color>" },
+            { "eco_insufficient_funds", "<color=red>{0} only has {1}, cannot deduct amount.</color>" },
 
             { "buy_usage", "Usage: /buy <item name|id|guid> [amount]" },
+            { "buy_invalid_amount", "<color=red>Quantity must be at least 1.</color>" },
             { "buy_item_not_found", "<color=red>Item '{0}' not found in shop.</color>" },
             { "buy_item_disabled", "<color=red>This item is currently not available for purchase.</color>" },
             { "buy_no_permission", "<color=red>You do not have permission to buy this item.</color>" },
@@ -59,13 +77,16 @@ namespace KizShop
             { "buy_insufficient_funds", "<color=red>You need {0} to buy {1}x {2}, but only have {3}.</color>" },
             { "buy_no_space", "<color=red>Not enough inventory space to receive {0}x {1}.</color>" },
             { "buy_success", "<color=green>Bought {0}x {1} for {2}. Remaining balance: {3}.</color>" },
-            { "buy_failed", "<color=red>Purchase transaction failed. No funds were deducted.</color>" },
+            { "buy_failed_refunded", "<color=red>Item delivery failed. Your purchase was canceled and refunded in full.</color>" },
 
             { "sell_usage", "Usage: /sell <item name|id|guid> [amount|all]" },
             { "sell_item_not_found", "<color=red>Item '{0}' not found in shop.</color>" },
             { "sell_item_disabled", "<color=red>This item cannot be sold to the shop.</color>" },
             { "sell_no_permission", "<color=red>You do not have permission to sell this item.</color>" },
-            { "sell_not_enough_items", "<color=red>You only have {0}x {1} in your inventory, but tried to sell {2}.</color>" },
+            { "sell_not_enough_items", "<color=red>You only have {0}x {1} in your gear pages, but tried to sell {2}.</color>" },
+            { "sell_gun_has_attachments", "<color=red>Cannot sell gun with attachments or loaded magazine. Remove them first.</color>" },
+            { "sell_failed", "<color=red>Failed to remove items from inventory.</color>" },
+            { "sell_payout_failed", "<color=red>Payout failed. Removed items have been restored to your inventory.</color>" },
             { "sell_success", "<color=green>Sold {0}x {1} for {2}. New balance: {3}.</color>" },
 
             { "cost_usage", "Usage: /cost <item name|id|guid>" },
@@ -82,7 +103,9 @@ namespace KizShop
             { "vehicle_disabled", "<color=red>This vehicle cannot be purchased.</color>" },
             { "vehicle_no_permission", "<color=red>You do not have permission to purchase this vehicle.</color>" },
             { "vehicle_insufficient_funds", "<color=red>You need {0} to purchase {1}, but have {2}.</color>" },
-            { "vehicle_spawn_failed", "<color=red>Vehicle failed to spawn. No funds were deducted.</color>" },
+            { "vehicle_cooldown", "<color=red>You must wait {0}s before purchasing another vehicle.</color>" },
+            { "vehicle_max_limit", "<color=red>You already own the maximum allowed number of vehicles ({0}).</color>" },
+            { "vehicle_spawn_failed", "<color=red>Vehicle failed to spawn ({0}). Funds were refunded.</color>" },
             { "vehicle_success", "<color=green>Successfully purchased and spawned {0} for {1}!</color>" },
 
             { "reward_player_kill", "<color=green>+ {0} for eliminating {1}!</color>" },
@@ -91,6 +114,12 @@ namespace KizShop
             { "reward_playtime", "<color=green>+ {0} playtime income reward!</color>" },
 
             { "kizshop_admin_usage", "Usage: /kizshop <reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>" },
+            { "kizshop_additem_usage", "Usage: /kizshop additem <id> \"<name>\" <buyPrice> [sellPrice] [permission]" },
+            { "kizshop_removeitem_usage", "Usage: /kizshop removeitem <id>" },
+            { "kizshop_setitemprice_usage", "Usage: /kizshop setitemprice <id> <buyPrice> [sellPrice]" },
+            { "kizshop_addveh_usage", "Usage: /kizshop addveh <id> \"<name>\" <buyPrice> [sellPrice] [permission]" },
+            { "kizshop_removeveh_usage", "Usage: /kizshop removeveh <id>" },
+            { "kizshop_setvehprice_usage", "Usage: /kizshop setvehprice <id> <buyPrice> [sellPrice]" },
             { "kizshop_reloaded", "<color=green>KizShop configuration and shop catalog reloaded successfully.</color>" },
             { "kizshop_item_added", "<color=green>Shop item {0} (ID: {1}) added/updated.</color>" },
             { "kizshop_item_removed", "<color=green>Shop item ID {0} removed.</color>" },
@@ -107,32 +136,52 @@ namespace KizShop
             try
             {
                 // 1. Initialize Storage
-                Storage = StorageFactory.Create(
-                    Configuration.Instance.DatabaseType,
-                    Configuration.Instance.ConnectionString,
-                    Directory);
-                Storage.InitializeAsync().GetAwaiter().GetResult();
+                try
+                {
+                    Storage = StorageFactory.Create(
+                        Configuration.Instance.DatabaseType,
+                        Configuration.Instance.ConnectionString,
+                        Directory);
+                    Storage.InitializeAsync().GetAwaiter().GetResult();
+                }
+                catch (Exception storageEx)
+                {
+                    Logger.LogError($"[KizShop] FATAL: Storage initialization failed ({Configuration.Instance.DatabaseType}): {storageEx}. Check database path or connection credentials. Unloading plugin.");
+                    UnloadPlugin();
+                    return;
+                }
 
-                // Prune logs if configured
+                // Initial prune & start 6-hour prune cycle
                 if (Configuration.Instance.LogRetentionDays > 0)
                 {
                     _ = Storage.PruneLogsAsync(Configuration.Instance.LogRetentionDays);
+                    StartLogPruneLoop();
                 }
 
-                // 2. Initialize Economy Service
+                // 2. Initialize Economy Service (disable cache when DatabaseType == MySQL)
+                bool isMySql = string.Equals(Configuration.Instance.DatabaseType, "MySQL", StringComparison.OrdinalIgnoreCase);
                 Economy = new EconomyService(
                     Storage,
-                    () => Configuration.Instance.StartingBalance,
-                    () => Configuration.Instance.MaxBalance > 0 ? (decimal?)Configuration.Instance.MaxBalance : null);
+                    () => Money.FromDecimal(Configuration.Instance.StartingBalance),
+                    () => Configuration.Instance.MaxBalance > 0 ? (Money?)Money.FromDecimal(Configuration.Instance.MaxBalance) : null,
+                    enableCache: !isMySql,
+                    dispatcher: Dispatcher);
 
                 Economy.OnBalanceChanged += (steamId, oldBal, newBal, reason) =>
                 {
                     KizShopAPI.RaiseBalanceChanged(steamId, oldBal, newBal, reason);
                 };
 
-                // 3. Initialize Shop Service
-                Shop = new ShopService(Directory);
+                // 3. Initialize Shop Service & Transactions
+                Shop = new ShopService(Directory, () => Configuration.Instance.AllowSellAboveBuy);
                 Shop.Load();
+
+                Transactions = new ShopTransactionService(
+                    Shop,
+                    Economy,
+                    new UnturnedInventoryGateway(),
+                    new UnturnedVehicleGateway(),
+                    () => Configuration.Instance);
 
                 // 4. Hook Game Events
                 UnturnedPlayerEvents.OnPlayerDeath += HandlePlayerDeath;
@@ -141,17 +190,19 @@ namespace KizShop
                 // 5. Start Playtime Income Loop
                 StartPlaytimeLoop();
 
-                Logger.Log("[KizShop] Plugin loaded successfully!");
+                Logger.Log("[KizShop] Plugin loaded successfully.");
             }
             catch (Exception ex)
             {
-                Logger.LogError($"[KizShop] Critical error loading plugin: {ex}");
+                Logger.LogError($"[KizShop] Unexpected error loading plugin: {ex}. Unloading.");
+                UnloadPlugin();
             }
         }
 
         protected override void Unload()
         {
             StopPlaytimeLoop();
+            StopLogPruneLoop();
 
             UnturnedPlayerEvents.OnPlayerDeath -= HandlePlayerDeath;
             UnturnedPlayerEvents.OnPlayerUpdateStat -= HandlePlayerStat;
@@ -167,37 +218,68 @@ namespace KizShop
                 Storage = null;
             }
 
+            Economy = null;
+            Shop = null;
+            Transactions = null;
             Instance = null;
+
             Logger.Log("[KizShop] Plugin unloaded.");
         }
 
         public new void ReloadPlugin()
         {
             base.ReloadPlugin();
-            Shop.Load();
+            Shop?.Load();
             StopPlaytimeLoop();
             StartPlaytimeLoop();
+            StopLogPruneLoop();
+            StartLogPruneLoop();
         }
 
-        public string FormatMoney(decimal amount)
+        public string FormatMoney(Money amount)
         {
-            return Translate("currency_format", Configuration.Instance.CurrencySymbol, amount, Configuration.Instance.CurrencyName);
+            return Translate("currency_format", Configuration.Instance.CurrencySymbol, amount.ToDecimal(), Configuration.Instance.CurrencyName);
         }
 
         private void HandlePlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, CSteamID murderer)
         {
             if (!Configuration.Instance.PlayerKillRewardEnabled) return;
-            if (murderer == CSteamID.Nil || murderer == player.CSteamID) return;
+            if (murderer == CSteamID.Nil || murderer == player.CSteamID) return; // No suicide
 
             var killer = UnturnedPlayer.FromCSteamID(murderer);
-            if (killer == null) return;
+            if (killer == null || killer.Player == null) return;
 
-            decimal reward = Configuration.Instance.PlayerKillRewardAmount;
-            if (reward <= 0) return;
-
-            _ = Economy.DepositAsync(killer.CSteamID.m_SteamID, reward, $"KillReward:{player.CharacterName}").ContinueWith(t =>
+            // Check same-group members (Unturned quests groupID)
+            if (killer.Player.quests != null && player.Player.quests != null &&
+                killer.Player.quests.groupID != CSteamID.Nil &&
+                killer.Player.quests.groupID == player.Player.quests.groupID)
             {
-                TaskDispatcher.QueueOnMainThread(() =>
+                return; // Same group: no reward
+            }
+
+            // Per (killer, victim) cooldown check
+            var key = (killer: killer.CSteamID.m_SteamID, victim: player.CSteamID.m_SteamID);
+            var now = DateTime.UtcNow;
+            if (_killCooldowns.TryGetValue(key, out var lastKill))
+            {
+                if ((now - lastKill).TotalSeconds < Configuration.Instance.PlayerKillRewardCooldownSeconds)
+                {
+                    return; // On cooldown
+                }
+            }
+
+            if (!Money.TryFromDecimal(Configuration.Instance.PlayerKillRewardAmount, Configuration.Instance.MaxTransactionAmount, out var reward, out _))
+            {
+                return;
+            }
+
+            _killCooldowns[key] = now;
+
+            // Off main thread DB work
+            Task.Run(async () =>
+            {
+                await Economy.DepositAsync(killer.CSteamID.m_SteamID, reward, $"KillReward:{player.CharacterName}").ConfigureAwait(false);
+                Dispatcher.QueueOnMainThread(() =>
                 {
                     var formatted = FormatMoney(reward);
                     UnturnedChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
@@ -210,25 +292,32 @@ namespace KizShop
             if (!Configuration.Instance.ZombieKillRewardEnabled) return;
             if (player == null) return;
 
-            decimal reward = 0;
+            decimal rewardDecimal = 0;
             string key = null;
 
             if (stat == EPlayerStat.KILLS_ZOMBIES_NORMAL)
             {
-                reward = Configuration.Instance.ZombieKillRewardAmount;
+                rewardDecimal = Configuration.Instance.ZombieKillRewardAmount;
                 key = "reward_zombie_kill";
             }
             else if (stat == EPlayerStat.KILLS_ZOMBIES_MEGA)
             {
-                reward = Configuration.Instance.MegaZombieKillRewardAmount;
+                rewardDecimal = Configuration.Instance.MegaZombieKillRewardAmount;
                 key = "reward_mega_zombie_kill";
             }
 
-            if (reward <= 0 || key == null) return;
+            if (rewardDecimal <= 0 || key == null) return;
 
-            _ = Economy.DepositAsync(player.CSteamID.m_SteamID, reward, $"ZombieReward:{stat}").ContinueWith(t =>
+            if (!Money.TryFromDecimal(rewardDecimal, Configuration.Instance.MaxTransactionAmount, out var reward, out _))
             {
-                TaskDispatcher.QueueOnMainThread(() =>
+                return;
+            }
+
+            // Off main thread DB work
+            Task.Run(async () =>
+            {
+                await Economy.DepositAsync(player.CSteamID.m_SteamID, reward, $"ZombieReward:{stat}").ConfigureAwait(false);
+                Dispatcher.QueueOnMainThread(() =>
                 {
                     var formatted = FormatMoney(reward);
                     UnturnedChat.Say(player, Translate(key, formatted), UnityEngine.Color.green);
@@ -252,7 +341,7 @@ namespace KizShop
 
                     try
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(interval), token);
+                        await Task.Delay(TimeSpan.FromSeconds(interval), token).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
@@ -262,33 +351,42 @@ namespace KizShop
                     if (token.IsCancellationRequested) break;
                     if (!Configuration.Instance.PlaytimeIncomeEnabled) continue;
 
-                    decimal amount = Configuration.Instance.PlaytimeIncomeAmount;
-                    if (amount <= 0) continue;
+                    if (!Money.TryFromDecimal(Configuration.Instance.PlaytimeIncomeAmount, Configuration.Instance.MaxTransactionAmount, out var amount, out _))
+                    {
+                        continue;
+                    }
 
-                    TaskDispatcher.QueueOnMainThread(() =>
+                    // Gather steam IDs on main thread
+                    var steamIds = new System.Collections.Generic.List<ulong>();
+                    Dispatcher.QueueOnMainThread(() =>
                     {
                         var clients = Provider.clients;
-                        if (clients == null) return;
-
-                        foreach (var client in clients)
+                        if (clients != null)
                         {
-                            if (client == null) continue;
-                            var steamId = client.playerID.steamID.m_SteamID;
-                            var uPlayer = UnturnedPlayer.FromSteamPlayer(client);
-
-                            _ = Economy.DepositAsync(steamId, amount, "PlaytimeIncome").ContinueWith(t =>
+                            foreach (var client in clients)
                             {
-                                TaskDispatcher.QueueOnMainThread(() =>
-                                {
-                                    if (uPlayer != null)
-                                    {
-                                        var formatted = FormatMoney(amount);
-                                        UnturnedChat.Say(uPlayer, Translate("reward_playtime", formatted), UnityEngine.Color.green);
-                                    }
-                                });
-                            });
+                                if (client != null) steamIds.Add(client.playerID.steamID.m_SteamID);
+                            }
                         }
                     });
+
+                    // Wait small tick for main thread collection
+                    await Task.Delay(200, token).ConfigureAwait(false);
+
+                    // Perform DB work off main thread
+                    foreach (var sId in steamIds)
+                    {
+                        await Economy.DepositAsync(sId, amount, "PlaytimeIncome").ConfigureAwait(false);
+                        Dispatcher.QueueOnMainThread(() =>
+                        {
+                            var uPlayer = UnturnedPlayer.FromCSteamID(new CSteamID(sId));
+                            if (uPlayer != null)
+                            {
+                                var formatted = FormatMoney(amount);
+                                UnturnedChat.Say(uPlayer, Translate("reward_playtime", formatted), UnityEngine.Color.green);
+                            }
+                        });
+                    }
                 }
             }, token);
         }
@@ -300,6 +398,43 @@ namespace KizShop
                 _playtimeCts.Cancel();
                 _playtimeCts.Dispose();
                 _playtimeCts = null;
+            }
+        }
+
+        private void StartLogPruneLoop()
+        {
+            _logPruneCts = new CancellationTokenSource();
+            var token = _logPruneCts.Token;
+
+            Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromHours(6), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested) break;
+                    if (Storage != null && Configuration.Instance.LogRetentionDays > 0)
+                    {
+                        await Storage.PruneLogsAsync(Configuration.Instance.LogRetentionDays).ConfigureAwait(false);
+                    }
+                }
+            }, token);
+        }
+
+        private void StopLogPruneLoop()
+        {
+            if (_logPruneCts != null)
+            {
+                _logPruneCts.Cancel();
+                _logPruneCts.Dispose();
+                _logPruneCts = null;
             }
         }
     }

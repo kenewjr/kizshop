@@ -1,10 +1,9 @@
-using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Rocket.API;
-using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
-using KizShop.Shop;
+using KizShop.Common;
 
 namespace KizShop.Commands
 {
@@ -19,81 +18,45 @@ namespace KizShop.Commands
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
-            var plugin = KizShopPlugin.Instance;
-            if (plugin == null || plugin.Shop == null || plugin.Economy == null) return;
-
-            var player = (UnturnedPlayer)caller;
-            if (command.Length < 1)
+            CommandRunner.Run(caller, async () =>
             {
-                UnturnedChat.Say(caller, plugin.Translate("sell_usage"), UnityEngine.Color.yellow);
-                return;
-            }
+                var plugin = KizShopPlugin.Instance;
+                var player = (UnturnedPlayer)caller;
 
-            string query = command[0];
-            var entry = plugin.Shop.FindItem(query);
-            if (entry == null)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("sell_item_not_found", query), UnityEngine.Color.red);
-                return;
-            }
-
-            if (!entry.CanSell || !entry.SellPrice.HasValue || entry.SellPrice.Value <= 0)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("sell_item_disabled"), UnityEngine.Color.red);
-                return;
-            }
-
-            if (!string.IsNullOrEmpty(entry.Permission) && !caller.HasPermission(entry.Permission) && !caller.IsAdmin)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("sell_no_permission"), UnityEngine.Color.red);
-                return;
-            }
-
-            int availableCount = InventoryHelper.CountItems(player.Inventory, entry.Id);
-            if (availableCount <= 0)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("sell_not_enough_items", 0, entry.Name, 1), UnityEngine.Color.red);
-                return;
-            }
-
-            int amountToSell = 1;
-            if (command.Length >= 2)
-            {
-                if (string.Equals(command[1], "all", StringComparison.OrdinalIgnoreCase))
+                if (command.Length < 1)
                 {
-                    amountToSell = availableCount;
-                }
-                else if (!int.TryParse(command[1], out amountToSell) || amountToSell <= 0)
-                {
-                    UnturnedChat.Say(caller, plugin.Translate("sell_usage"), UnityEngine.Color.yellow);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("sell_usage"), UnityEngine.Color.yellow));
                     return;
                 }
-            }
 
-            if (availableCount < amountToSell)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("sell_not_enough_items", availableCount, entry.Name, amountToSell), UnityEngine.Color.red);
-                return;
-            }
+                string query = command[0];
+                string amountArg = command.Length >= 2 ? command[1] : "1";
 
-            // Remove items first from player inventory
-            bool removed = InventoryHelper.RemoveItems(player.Inventory, entry.Id, amountToSell);
-            if (!removed)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("sell_not_enough_items", availableCount, entry.Name, amountToSell), UnityEngine.Color.red);
-                return;
-            }
+                var result = await plugin.Transactions.ExecuteSellAsync(
+                    player.CSteamID.m_SteamID,
+                    query,
+                    amountArg,
+                    node => caller.HasPermission(node),
+                    caller.IsAdmin).ConfigureAwait(false);
 
-            // Pay the player
-            decimal totalPayout = entry.SellPrice.Value * amountToSell;
-            _ = plugin.Economy.DepositAsync(player.CSteamID.m_SteamID, totalPayout, $"ShopSell:{entry.Id}x{amountToSell}").ContinueWith(t =>
-            {
-                var newBal = t.Result;
-                TaskDispatcher.QueueOnMainThread(() =>
+                plugin.Dispatcher.QueueOnMainThread(() =>
                 {
-                    var payoutStr = plugin.FormatMoney(totalPayout);
-                    var balStr = plugin.FormatMoney(newBal);
-                    UnturnedChat.Say(caller, plugin.Translate("sell_success", amountToSell, entry.Name, payoutStr, balStr), UnityEngine.Color.green);
+                    if (result.Success)
+                    {
+                        var payoutStr = plugin.FormatMoney(result.Price);
+                        var balStr = plugin.FormatMoney(result.NewBalance);
+                        UnturnedChat.Say(caller, plugin.Translate("sell_success", result.Quantity, result.ItemEntry.Name, payoutStr, balStr), UnityEngine.Color.green);
+                    }
+                    else if (result.CandidateNames != null && result.CandidateNames.Count > 0)
+                    {
+                        string candidates = string.Join(", ", result.CandidateNames);
+                        UnturnedChat.Say(caller, plugin.Translate("ambiguous_match", candidates), UnityEngine.Color.yellow);
+                    }
+                    else
+                    {
+                        UnturnedChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
+                    }
                 });
             });
         }

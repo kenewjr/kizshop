@@ -1,10 +1,10 @@
-using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading.Tasks;
 using Rocket.API;
-using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
+using KizShop.Common;
 
 namespace KizShop.Commands
 {
@@ -19,83 +19,119 @@ namespace KizShop.Commands
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
-            var plugin = KizShopPlugin.Instance;
-            if (plugin == null || plugin.Economy == null) return;
+            CommandRunner.Run(caller, async () =>
+            {
+                var plugin = KizShopPlugin.Instance;
 
-            if (command.Length < 3)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow);
-                return;
-            }
+                if (command.Length < 3)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
+                    return;
+                }
 
-            string subAction = command[0].ToLowerInvariant();
-            string targetArg = command[1];
-            if (!decimal.TryParse(command[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount < 0)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red);
-                return;
-            }
+                string subAction = command[0].ToLowerInvariant();
+                string targetArg = command[1];
 
-            ulong targetSteamId = 0;
-            string targetName = targetArg;
-            var targetPlayer = UnturnedPlayer.FromName(targetArg);
-            if (targetPlayer != null)
-            {
-                targetSteamId = targetPlayer.CSteamID.m_SteamID;
-                targetName = targetPlayer.CharacterName;
-            }
-            else if (ulong.TryParse(targetArg, out var parsedId))
-            {
-                targetSteamId = parsedId;
-            }
+                if (!decimal.TryParse(command[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var rawAmount))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red));
+                    return;
+                }
 
-            if (targetSteamId == 0)
-            {
-                UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", targetArg), UnityEngine.Color.red);
-                return;
-            }
-
-            switch (subAction)
-            {
-                case "give":
-                    _ = plugin.Economy.DepositAsync(targetSteamId, amount, $"EcoGive by {caller.DisplayName}").ContinueWith(t =>
+                ulong targetSteamId = 0;
+                string targetName = targetArg;
+                var targetPlayer = UnturnedPlayer.FromName(targetArg);
+                if (targetPlayer != null)
+                {
+                    targetSteamId = targetPlayer.CSteamID.m_SteamID;
+                    targetName = targetPlayer.CharacterName;
+                }
+                else if (ulong.TryParse(targetArg, out var parsedId))
+                {
+                    if (parsedId < 76561197960265728ul || parsedId > 76561202255233023ul)
                     {
-                        var newBal = t.Result;
-                        TaskDispatcher.QueueOnMainThread(() =>
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            UnturnedChat.Say(caller, plugin.Translate("invalid_steamid"), UnityEngine.Color.red));
+                        return;
+                    }
+                    targetSteamId = parsedId;
+                }
+
+                if (targetSteamId == 0)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        UnturnedChat.Say(caller, plugin.Translate("balance_player_not_found", targetArg), UnityEngine.Color.red));
+                    return;
+                }
+
+                var maxTx = plugin.Configuration.Instance.MaxTransactionAmount;
+
+                switch (subAction)
+                {
+                    case "give":
+                        if (!Money.TryFromDecimal(rawAmount, maxTx, out var giveMoney, out var giveErr))
                         {
-                            var formattedBal = plugin.FormatMoney(newBal);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                UnturnedChat.Say(caller, plugin.Translate("invalid_money_amount", giveErr), UnityEngine.Color.red));
+                            return;
+                        }
+
+                        var depRes = await plugin.Economy.DepositAsync(targetSteamId, giveMoney, $"EcoGive by {caller.DisplayName}").ConfigureAwait(false);
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                        {
+                            var formattedBal = plugin.FormatMoney(depRes.NewBalance);
                             UnturnedChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
                         });
-                    });
-                    break;
+                        break;
 
-                case "take":
-                    _ = plugin.Economy.TryWithdrawAsync(targetSteamId, amount, $"EcoTake by {caller.DisplayName}").ContinueWith(t =>
-                    {
-                        TaskDispatcher.QueueOnMainThread(async () =>
+                    case "take":
+                        if (!Money.TryFromDecimal(rawAmount, maxTx, out var takeMoney, out var takeErr))
                         {
-                            var newBal = await plugin.Economy.GetBalanceAsync(targetSteamId);
-                            var formattedBal = plugin.FormatMoney(newBal);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                UnturnedChat.Say(caller, plugin.Translate("invalid_money_amount", takeErr), UnityEngine.Color.red));
+                            return;
+                        }
+
+                        var withRes = await plugin.Economy.TryWithdrawAsync(targetSteamId, takeMoney, $"EcoTake by {caller.DisplayName}").ConfigureAwait(false);
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                        {
+                            if (withRes.Success)
+                            {
+                                var formattedBal = plugin.FormatMoney(withRes.NewBalance);
+                                UnturnedChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
+                            }
+                            else
+                            {
+                                var currentBal = plugin.FormatMoney(withRes.OldBalance);
+                                UnturnedChat.Say(caller, plugin.Translate("eco_insufficient_funds", targetName, currentBal), UnityEngine.Color.red);
+                            }
+                        });
+                        break;
+
+                    case "set":
+                        if (!Money.TryFromDecimalAllowZero(rawAmount, out var setMoney, out var setErr))
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                UnturnedChat.Say(caller, plugin.Translate("invalid_money_amount", setErr), UnityEngine.Color.red));
+                            return;
+                        }
+
+                        await plugin.Economy.SetBalanceAsync(targetSteamId, setMoney, $"EcoSet by {caller.DisplayName}").ConfigureAwait(false);
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                        {
+                            var formattedBal = plugin.FormatMoney(setMoney);
                             UnturnedChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
                         });
-                    });
-                    break;
+                        break;
 
-                case "set":
-                    _ = plugin.Economy.SetBalanceAsync(targetSteamId, amount, $"EcoSet by {caller.DisplayName}").ContinueWith(t =>
-                    {
-                        TaskDispatcher.QueueOnMainThread(() =>
-                        {
-                            var formattedBal = plugin.FormatMoney(amount);
-                            UnturnedChat.Say(caller, plugin.Translate("eco_success", targetName, formattedBal), UnityEngine.Color.green);
-                        });
-                    });
-                    break;
-
-                default:
-                    UnturnedChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow);
-                    break;
-            }
+                    default:
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            UnturnedChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
+                        break;
+                }
+            });
         }
     }
 }

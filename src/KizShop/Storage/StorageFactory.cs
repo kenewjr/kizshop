@@ -12,22 +12,36 @@ namespace KizShop.Storage
                 return new MySqlStorage(connectionString);
             }
 
-            // Default to SQLite
-            string dbPath;
+            if (string.Equals(storageType, "SQLite", StringComparison.OrdinalIgnoreCase))
+            {
+                string sqlitePath;
+                if (string.IsNullOrWhiteSpace(connectionString) || connectionString.EndsWith(".db", StringComparison.OrdinalIgnoreCase) || connectionString.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase))
+                {
+                    sqlitePath = string.IsNullOrWhiteSpace(connectionString) ? Path.Combine(dataFolder, "kizshop.db") : (Path.IsPathRooted(connectionString) ? connectionString : Path.Combine(dataFolder, connectionString));
+                }
+                else
+                {
+                    sqlitePath = Path.Combine(dataFolder, "kizshop.db");
+                }
+                return new SqliteStorage(sqlitePath);
+            }
+
+            // Default to LiteDB (pure managed, zero native binary dependencies)
+            string liteDbPath;
             if (string.IsNullOrWhiteSpace(connectionString))
             {
-                dbPath = Path.Combine(dataFolder, "kizshop.db");
+                liteDbPath = Path.Combine(dataFolder, "kizshop.litedb");
             }
-            else if (connectionString.EndsWith(".db", StringComparison.OrdinalIgnoreCase) || connectionString.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase))
+            else if (connectionString.EndsWith(".litedb", StringComparison.OrdinalIgnoreCase) || connectionString.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
             {
-                dbPath = Path.IsPathRooted(connectionString) ? connectionString : Path.Combine(dataFolder, connectionString);
+                liteDbPath = Path.IsPathRooted(connectionString) ? connectionString : Path.Combine(dataFolder, connectionString);
             }
             else
             {
-                dbPath = Path.Combine(dataFolder, "kizshop.db");
+                liteDbPath = Path.Combine(dataFolder, "kizshop.litedb");
             }
 
-            return new SqliteStorage(dbPath);
+            return new LiteDbStorage(liteDbPath);
         }
     }
 }

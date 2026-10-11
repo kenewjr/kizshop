@@ -17,59 +17,60 @@ namespace KizShop.Tests
         };
 
         [Fact]
-        public void FindItemEntry_ByNumericId_FindsExact()
+        public void ResolveItem_ByNumericId_FindsExact()
         {
-            var match = AssetResolver.FindItemEntry(_items, "18");
-            Assert.NotNull(match);
-            Assert.Equal("Timberwolf", match.Name);
+            var res = AssetResolver.ResolveItem(_items, "18");
+            Assert.Equal(LookupStatus.Found, res.Status);
+            Assert.Equal("Timberwolf", res.Entry.Name);
         }
 
         [Fact]
-        public void FindItemEntry_ByGuid_FindsExact()
+        public void ResolveItem_ByGuid_FindsExact()
         {
-            var match = AssetResolver.FindItemEntry(_items, "a1b2c3d4e5f60718293a4b5c6d7e8f90");
-            Assert.NotNull(match);
-            Assert.Equal(18, match.Id);
+            var res = AssetResolver.ResolveItem(_items, "a1b2c3d4e5f60718293a4b5c6d7e8f90");
+            Assert.Equal(LookupStatus.Found, res.Status);
+            Assert.Equal(18, res.Entry.Id);
         }
 
         [Fact]
-        public void FindItemEntry_ByHyphenatedGuid_FindsExact()
+        public void ResolveItem_ByHyphenatedGuid_FindsExact()
         {
             var guid = Guid.Parse("11223344-5566-7788-9900-aabbccddeeff");
-            var match = AssetResolver.FindItemEntry(_items, guid.ToString("D"));
-            Assert.NotNull(match);
-            Assert.Equal(20, match.Id);
+            var res = AssetResolver.ResolveItem(_items, guid.ToString("D"));
+            Assert.Equal(LookupStatus.Found, res.Status);
+            Assert.Equal(20, res.Entry.Id);
         }
 
         [Fact]
-        public void FindItemEntry_ByExactName_CaseInsensitive()
+        public void ResolveItem_ByExactName_CaseInsensitive()
         {
-            var match = AssetResolver.FindItemEntry(_items, "medkit");
-            Assert.NotNull(match);
-            Assert.Equal(15, match.Id);
+            var res = AssetResolver.ResolveItem(_items, "medkit");
+            Assert.Equal(LookupStatus.Found, res.Status);
+            Assert.Equal(15, res.Entry.Id);
         }
 
         [Fact]
-        public void FindItemEntry_ByPrefixName_Matches()
+        public void ResolveItem_ByUniquePrefixName_Matches()
         {
-            var match = AssetResolver.FindItemEntry(_items, "Alice");
-            Assert.NotNull(match);
-            Assert.Equal(253, match.Id);
+            var res = AssetResolver.ResolveItem(_items, "Alice");
+            Assert.Equal(LookupStatus.Found, res.Status);
+            Assert.Equal(253, res.Entry.Id);
         }
 
         [Fact]
-        public void FindItemEntry_ByPartialName_Matches()
+        public void ResolveItem_ByUniquePartialName_Matches()
         {
-            var match = AssetResolver.FindItemEntry(_items, "Magazine");
-            Assert.NotNull(match);
-            Assert.Equal(20, match.Id);
+            var res = AssetResolver.ResolveItem(_items, "Magazine");
+            Assert.Equal(LookupStatus.Found, res.Status);
+            Assert.Equal(20, res.Entry.Id);
         }
 
         [Fact]
-        public void FindItemEntry_NonExistent_ReturnsNull()
+        public void ResolveItem_NonExistent_ReturnsNotFound()
         {
-            var match = AssetResolver.FindItemEntry(_items, "Dragonfang");
-            Assert.Null(match);
+            var res = AssetResolver.ResolveItem(_items, "Dragonfang");
+            Assert.Equal(LookupStatus.NotFound, res.Status);
+            Assert.Null(res.Entry);
         }
     }
 }
