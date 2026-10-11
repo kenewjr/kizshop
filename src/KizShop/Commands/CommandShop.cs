@@ -21,6 +21,16 @@ namespace KizShop.Commands
             {
                 var plugin = KizShopPlugin.Instance;
 
+                if (command.Length == 0 &&
+                    caller is Rocket.Unturned.Player.UnturnedPlayer uPlayer &&
+                    plugin.Configuration.Instance.UseVisualUiForShopCommand &&
+                    plugin.Configuration.Instance.EnableVisualUI &&
+                    plugin.ShopUi != null)
+                {
+                    await plugin.ShopUi.OpenShopAsync(uPlayer.CSteamID.m_SteamID).ConfigureAwait(false);
+                    return;
+                }
+
                 int page = 1;
                 if (command.Length >= 1)
                 {

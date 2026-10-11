@@ -95,3 +95,49 @@ Manual verification checklist for a local Windows Unturned dedicated server runn
 - [ ] Stop server cleanly with `shutdown`.
 - [ ] Restart server and join. Run `/balance`.
   - **Expected**: Balance is retained exactly as before restart from the `kizshop.litedb` database.
+
+---
+
+## 9. In-Game Visual UI Verification
+- [ ] Ensure `EnableVisualUI` is set to `true` in config (Effect ID default `32001`).
+- [ ] In game, run `/shopui` (or `/sui`, `/vshop`).
+  - **Expected**:
+    - The shop UI overlay appears on the client screen with unlocked mouse cursor (modal flag active).
+    - Player balance, page number, and tabs are rendered accurately.
+- [ ] Click `KizShop_Tab_Vehicles`.
+  - **Expected**: Catalog switches to show available vehicles.
+- [ ] Click `KizShop_Tab_Items`.
+  - **Expected**: Catalog switches back to items list.
+- [ ] Click `KizShop_Qty_5` and `KizShop_Qty_10`.
+  - **Expected**: Quantity indicator updates to 5 and 10.
+- [ ] Click `KizShop_Buy_0`.
+  - **Expected**: The item in slot 0 is purchased with the selected quantity, inventory receives items, balance updates in real time.
+- [ ] Click `KizShop_Close`.
+  - **Expected**: UI closes and player resumes normal game input.
+- [ ] If `UseVisualUiForShopCommand` is enabled, type `/shop` without arguments.
+  - **Expected**: The visual UI opens instead of printing chat text.
+
+---
+
+## 10. Discord Bot & Webhooks Verification
+- [ ] Configure `DiscordWebhookEnabled` to `true` with a valid test webhook URL.
+- [ ] Purchase an item in-game via `/buy` or Visual UI.
+  - **Expected**: A rich green embed appears in Discord channel showing buyer SteamID, item name, cost, and remaining balance.
+- [ ] Sell an item in-game via `/sell`.
+  - **Expected**: A blue embed appears in Discord showing seller SteamID, payout amount, and new balance.
+- [ ] Run an admin balance adjustment: `/eco give <Player> 100`.
+  - **Expected**: A yellow admin audit embed appears in Discord.
+- [ ] Execute an economy transaction exceeding `DiscordLargeTransactionThreshold` (e.g. > $5,000).
+  - **Expected**: An orange large transaction security alert embed is triggered.
+- [ ] Configure `DiscordBotEnabled` to `true`, add bot token and admin user ID to `DiscordBotAdminUserIds`.
+- [ ] In Discord server channel, run `!ks help`.
+  - **Expected**: Bot replies with command list.
+- [ ] Run `!ks bal <SteamID64>`.
+  - **Expected**: Bot replies with accurate real-time balance.
+- [ ] Run `!ks baltop`.
+  - **Expected**: Bot returns ranked list of wealthiest players.
+- [ ] As an unauthorized Discord user, run `!ks eco give <SteamID64> 50`.
+  - **Expected**: Bot refuses action with permission denied message.
+- [ ] As an authorized Discord admin, run `!ks eco give <SteamID64> 50`.
+  - **Expected**: Target balance is updated on the server and bot confirms new balance.
+

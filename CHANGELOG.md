@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-11
+
+### Added
+- **In-Game Visual UI**:
+  - Modal UI Effect for Unturned (`EffectManager.sendUIEffect`, `enablePluginWidgetFlag(Modal)`).
+  - Configurable `UIEffectId`, `UIKey`, `UIItemsPerPage`.
+  - Item and Vehicle tabs (`KizShop_Tab_Items`, `KizShop_Tab_Vehicles`).
+  - Pagination navigation (`KizShop_Next`, `KizShop_Prev`).
+  - Quantity multipliers (`KizShop_Qty_1`, `KizShop_Qty_5`, `KizShop_Qty_10`).
+  - Slot action buttons for buying and selling directly from UI.
+  - New command `/shopui` (aliases: `/sui`, `/vshop`) with permission `kizshop.shopui`.
+  - Config option `UseVisualUiForShopCommand` to open UI automatically on `/shop` when no args are provided.
+  - Decoupled `IShopUiGateway` for comprehensive unit testability without Unity/Unturned runtime.
+- **Discord Webhooks**:
+  - Pure managed `HttpClient` webhook integration with zero external NuGet packages.
+  - Rich embed alerts for purchases, sales, admin eco actions (`/eco`), and errors.
+  - Configurable `DiscordLargeTransactionThreshold` for security alerting on suspicious or large economy movements.
+- **Discord Bot (Gateway v10)**:
+  - Pure managed `ClientWebSocket` Discord Gateway connection with automated heartbeat loop and reconnect logic.
+  - Commands: `!ks bal <steamid>`, `!ks baltop`, `!ks eco <give|take|set> <steamid> <amount>`, `!ks help`.
+  - Admin access validation for bot eco actions against `DiscordBotAdminUserIds`.
+
 ## [0.1.1] - 2026-10-11
 
 ### Security & Correctness Fixes (Addendum 2)

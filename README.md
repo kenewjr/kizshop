@@ -58,6 +58,7 @@
 | `/sell <item> [amount\|all]` | | Sell items from inventory to shop | `kizshop.sell` |
 | `/cost <item\|vehicle>` | `/price` | Check buy and sell prices | `kizshop.cost` |
 | `/shop [page]` | `/items` | View paginated catalog of available items | `kizshop.shop` |
+| `/shopui` | `/sui`, `/vshop` | Open the interactive in-game visual UI | `kizshop.shop`, `kizshop.shopui` |
 | `/buyvehicle <name\|id\|guid>` | `/buyv`, `/vehicle` | Buy and safely spawn a vehicle | `kizshop.vehicle` |
 | `/eco <give\|take\|set> <player> <amount>` | `/economy` | Admin: adjust player balances | `kizshop.eco`, `kizshop.admin` |
 | `/kizshop reload` | `/ks` | Admin: reload config & shop catalog | `kizshop.admin` |
@@ -67,6 +68,15 @@
 | `/kizshop addveh <id> <name> <buy> [sell] [perm]` | | Admin: add or update a vehicle entry | `kizshop.admin` |
 | `/kizshop removeveh <id>` | | Admin: remove a vehicle from shop | `kizshop.admin` |
 | `/kizshop setvehprice <id> <buy> [sell]` | | Admin: update prices for a vehicle | `kizshop.admin` |
+
+### Discord Bot Commands (Gateway v10)
+
+| Command | Description | Permission |
+|---|---|---|
+| `!ks bal <SteamID64>` | Check balance of specified player | Anyone |
+| `!ks baltop` | Display top wealthiest accounts | Anyone |
+| `!ks eco <give\|take\|set> <SteamID64> <amount>` | Admin balance adjustment | `DiscordBotAdminUserIds` |
+| `!ks help` | List available bot commands | Anyone |
 
 ---
 
@@ -111,6 +121,26 @@
   <ScaleSellByQuality>true</ScaleSellByQuality>
   <AllowSellAboveBuy>false</AllowSellAboveBuy>
   <ShopItemsPerPage>8</ShopItemsPerPage>
+
+  <!-- In-Game Visual UI Settings -->
+  <EnableVisualUI>true</EnableVisualUI>
+  <UIEffectId>32001</UIEffectId>
+  <UIKey>32001</UIKey>
+  <UseVisualUiForShopCommand>false</UseVisualUiForShopCommand>
+  <UIItemsPerPage>6</UIItemsPerPage>
+
+  <!-- Discord Webhook Integration -->
+  <DiscordWebhookEnabled>false</DiscordWebhookEnabled>
+  <DiscordWebhookUrl></DiscordWebhookUrl>
+  <DiscordLogPurchases>true</DiscordLogPurchases>
+  <DiscordLogAdminEco>true</DiscordLogAdminEco>
+  <DiscordLargeTransactionThreshold>5000.00</DiscordLargeTransactionThreshold>
+
+  <!-- Discord Bot Integration (Gateway v10) -->
+  <DiscordBotEnabled>false</DiscordBotEnabled>
+  <DiscordBotToken></DiscordBotToken>
+  <DiscordBotPrefix>!ks </DiscordBotPrefix>
+  <DiscordBotAdminUserIds></DiscordBotAdminUserIds>
 </KizShopConfiguration>
 ```
 

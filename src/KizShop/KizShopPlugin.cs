@@ -2,7 +2,9 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
+using Rocket.API;
 using Rocket.API.Collections;
+using Rocket.Core;
 using Rocket.Core.Logging;
 using Rocket.Core.Plugins;
 using Rocket.Unturned.Chat;
@@ -12,10 +14,12 @@ using SDG.Unturned;
 using Steamworks;
 using KizShop.API;
 using KizShop.Common;
+using KizShop.Discord;
 using KizShop.Economy;
 using KizShop.Shop;
 using KizShop.Shop.Gateways;
 using KizShop.Storage;
+using KizShop.UI;
 
 namespace KizShop
 {
@@ -27,6 +31,9 @@ namespace KizShop
         public EconomyService Economy { get; private set; }
         public ShopService Shop { get; private set; }
         public ShopTransactionService Transactions { get; private set; }
+        public ShopUiService ShopUi { get; private set; }
+        public DiscordWebhookService DiscordWebhook { get; private set; }
+        public DiscordBotService DiscordBot { get; private set; }
         public IMainThreadDispatcher Dispatcher { get; private set; } = new RocketMainThreadDispatcher();
 
         private CancellationTokenSource _playtimeCts;
@@ -183,11 +190,49 @@ namespace KizShop
                     new UnturnedVehicleGateway(),
                     () => Configuration.Instance);
 
-                // 4. Hook Game Events
+                // 4. Initialize Visual UI
+                var uiGateway = new UnturnedShopUiGateway();
+                ShopUi = new ShopUiService(Shop, Economy, Transactions, uiGateway, () => Configuration.Instance);
+                EffectManager.onEffectButtonClicked += OnEffectButtonClicked;
+
+                // 5. Initialize Discord Services & Webhooks
+                DiscordWebhook = new DiscordWebhookService(() => Configuration.Instance);
+                DiscordBot = new DiscordBotService(Economy, Storage, () => Configuration.Instance);
+                DiscordBot.Start();
+
+                // Connect transaction alerts to webhooks
+                Transactions.OnItemPurchased += (steamId, entry, qty, price, newBal) =>
+                {
+                    _ = DiscordWebhook?.SendPurchaseAlertAsync(steamId, entry.Name, qty, price, newBal);
+                    if (price.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
+                    {
+                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "Purchase", price, $"{qty}x {entry.Name}");
+                    }
+                };
+
+                Transactions.OnItemSold += (steamId, entry, qty, payout, newBal) =>
+                {
+                    _ = DiscordWebhook?.SendSaleAlertAsync(steamId, entry.Name, qty, payout, newBal);
+                    if (payout.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
+                    {
+                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "Sale", payout, $"{qty}x {entry.Name}");
+                    }
+                };
+
+                Transactions.OnVehiclePurchased += (steamId, entry, price, newBal) =>
+                {
+                    _ = DiscordWebhook?.SendPurchaseAlertAsync(steamId, $"Vehicle {entry.Name}", 1, price, newBal);
+                    if (price.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
+                    {
+                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "VehiclePurchase", price, entry.Name);
+                    }
+                };
+
+                // 6. Hook Game Events
                 UnturnedPlayerEvents.OnPlayerDeath += HandlePlayerDeath;
                 UnturnedPlayerEvents.OnPlayerUpdateStat += HandlePlayerStat;
 
-                // 5. Start Playtime Income Loop
+                // 7. Start Playtime Income Loop
                 StartPlaytimeLoop();
 
                 Logger.Log("[KizShop] Plugin loaded successfully.");
@@ -201,11 +246,27 @@ namespace KizShop
 
         protected override void Unload()
         {
+            EffectManager.onEffectButtonClicked -= OnEffectButtonClicked;
+
             StopPlaytimeLoop();
             StopLogPruneLoop();
 
             UnturnedPlayerEvents.OnPlayerDeath -= HandlePlayerDeath;
             UnturnedPlayerEvents.OnPlayerUpdateStat -= HandlePlayerStat;
+
+            if (DiscordBot != null)
+            {
+                DiscordBot.Dispose();
+                DiscordBot = null;
+            }
+
+            if (DiscordWebhook != null)
+            {
+                DiscordWebhook.Dispose();
+                DiscordWebhook = null;
+            }
+
+            ShopUi = null;
 
             if (Economy != null)
             {
@@ -234,6 +295,33 @@ namespace KizShop
             StartPlaytimeLoop();
             StopLogPruneLoop();
             StartLogPruneLoop();
+
+            DiscordBot?.Stop();
+            DiscordBot?.Start();
+        }
+
+        private void OnEffectButtonClicked(Player player, string buttonName)
+        {
+            if (player == null || ShopUi == null) return;
+            var steamId = player.channel.owner.playerID.steamID.m_SteamID;
+            var uPlayer = UnturnedPlayer.FromCSteamID(player.channel.owner.playerID.steamID);
+            bool isAdmin = player.channel.owner.isAdmin;
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await ShopUi.HandleButtonClickedAsync(
+                        steamId,
+                        buttonName,
+                        perm => uPlayer != null && uPlayer.HasPermission(perm),
+                        isAdmin).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Error in OnEffectButtonClicked for {steamId}: {ex}");
+                }
+            });
         }
 
         public string FormatMoney(Money amount)

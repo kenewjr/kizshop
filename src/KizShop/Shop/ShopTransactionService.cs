@@ -36,6 +36,10 @@ namespace KizShop.Shop
         private readonly ConcurrentDictionary<ulong, byte> _inFlightLocks = new ConcurrentDictionary<ulong, byte>();
         private readonly ConcurrentDictionary<ulong, DateTime> _vehicleCooldowns = new ConcurrentDictionary<ulong, DateTime>();
 
+        public event Action<ulong, ItemShopEntry, int, Money, Money> OnItemPurchased;
+        public event Action<ulong, ItemShopEntry, int, Money, Money> OnItemSold;
+        public event Action<ulong, VehicleShopEntry, Money, Money> OnVehiclePurchased;
+
         public ShopTransactionService(
             ShopService shopService,
             EconomyService economyService,
@@ -167,6 +171,7 @@ namespace KizShop.Shop
                 }
 
                 var newBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                OnItemPurchased?.Invoke(steamId, entry, quantity, totalMoney, newBal);
                 return new ShopTransactionResult
                 {
                     Success = true,
@@ -310,6 +315,7 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
                 }
 
+                OnItemSold?.Invoke(steamId, entry, amountToSell, totalPayout, depositRes.NewBalance);
                 return new ShopTransactionResult
                 {
                     Success = true,
@@ -418,6 +424,7 @@ namespace KizShop.Shop
 
                 _vehicleCooldowns[steamId] = _clock.UtcNow;
                 var newBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                OnVehiclePurchased?.Invoke(steamId, entry, costMoney, newBal);
 
                 return new ShopTransactionResult
                 {
