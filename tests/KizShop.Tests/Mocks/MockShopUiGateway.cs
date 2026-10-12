@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using KizShop.UI;
 
 namespace KizShop.Tests.Mocks
@@ -12,25 +13,28 @@ namespace KizShop.Tests.Mocks
 
         public bool OpenUiSuccess { get; set; } = true;
 
-        public bool OpenUi(ulong steamId, ushort effectId, short key)
+        public Task<bool> OpenUiAsync(ulong steamId, ushort effectId, short key)
         {
             OpenCalls.Add((steamId, effectId, key));
-            return OpenUiSuccess;
+            return Task.FromResult(OpenUiSuccess);
         }
 
-        public void CloseUi(ulong steamId, ushort effectId, short key)
+        public Task CloseUiAsync(ulong steamId, ushort effectId, short key)
         {
             CloseCalls.Add((steamId, effectId, key));
+            return Task.CompletedTask;
         }
 
-        public void UpdateText(ulong steamId, short key, string elementName, string text)
+        public Task UpdateTextAsync(ulong steamId, short key, string elementName, string text)
         {
             TextUpdates[elementName] = text;
+            return Task.CompletedTask;
         }
 
-        public void UpdateVisibility(ulong steamId, short key, string elementName, bool visible)
+        public Task UpdateVisibilityAsync(ulong steamId, short key, string elementName, bool visible)
         {
             VisibilityUpdates[elementName] = visible;
+            return Task.CompletedTask;
         }
     }
 }

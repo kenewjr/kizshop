@@ -110,9 +110,28 @@ namespace KizShop.Shop
             try
             {
                 // Check space simulation BEFORE withdrawing
-                if (!_inventoryGateway.CheckSpace(steamId, entry.Id, quantity))
+                var spaceRes = await _inventoryGateway.CheckSpaceAsync(steamId, entry.Id, quantity).ConfigureAwait(false);
+                if (!spaceRes.Fits)
                 {
-                    return new ShopTransactionResult { Success = false, ErrorKey = "buy_no_space", ErrorArgs = new object[] { quantity, entry.Name } };
+                    string errKey;
+                    object[] errArgs = null;
+                    switch (spaceRes.Reason)
+                    {
+                        case CheckSpaceReason.PlayerNull:
+                        case CheckSpaceReason.InventoryNull:
+                            errKey = "buy_player_unavailable";
+                            break;
+                        case CheckSpaceReason.AssetNotFound:
+                            errKey = "buy_item_unknown";
+                            errArgs = new object[] { entry.Id };
+                            break;
+                        case CheckSpaceReason.NoSpace:
+                        default:
+                            errKey = "buy_no_space";
+                            errArgs = new object[] { quantity, entry.Name };
+                            break;
+                    }
+                    return new ShopTransactionResult { Success = false, ErrorKey = errKey, ErrorArgs = errArgs };
                 }
 
                 // Atomically withdraw at storage level
@@ -131,20 +150,21 @@ namespace KizShop.Shop
                 // Deliver ONE INSTANCE AT A TIME and track every delivered reference
                 var deliveredItems = new List<Item>();
                 bool allDelivered = true;
+                int failedIndex = -1;
 
                 try
                 {
-                    byte defaultAmount = _inventoryGateway.GetDefaultAmount(entry.Id);
                     for (int i = 0; i < quantity; i++)
                     {
-                        var item = new Item(entry.Id, defaultAmount, 100, new byte[16]);
-                        if (_inventoryGateway.TryAddItem(steamId, item))
+                        var item = await _inventoryGateway.CreateItemAsync(entry.Id).ConfigureAwait(false);
+                        if (await _inventoryGateway.TryAddItemAsync(steamId, item).ConfigureAwait(false))
                         {
                             deliveredItems.Add(item);
                         }
                         else
                         {
                             allDelivered = false;
+                            failedIndex = i;
                             break;
                         }
                     }
@@ -153,14 +173,16 @@ namespace KizShop.Shop
                 {
                     KizLog.Error($"[KizShop] Exception during item delivery to {steamId}: {ex}");
                     allDelivered = false;
+                    if (failedIndex < 0) failedIndex = deliveredItems.Count;
                 }
 
                 // Rollback on any failure
                 if (!allDelivered || deliveredItems.Count < quantity)
                 {
+                    KizLog.Warning($"[KizShop] Buy delivery failed for {steamId} ({entry.Id}x{quantity}) at index {failedIndex}. Rolling back {deliveredItems.Count} items.");
                     foreach (var delivered in deliveredItems)
                     {
-                        _inventoryGateway.RemoveItemByReference(steamId, delivered);
+                        await _inventoryGateway.RemoveItemByReferenceAsync(steamId, delivered).ConfigureAwait(false);
                     }
 
                     // Full refund ignoring max balance
@@ -223,7 +245,7 @@ namespace KizShop.Shop
             }
 
             // Scan only player's own gear pages
-            var available = _inventoryGateway.GetGearItems(steamId, entry.Id);
+            var available = await _inventoryGateway.GetGearItemsAsync(steamId, entry.Id).ConfigureAwait(false);
             if (available.Count == 0)
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "sell_not_enough_items", ErrorArgs = new object[] { 0, entry.Name, 1 } };
@@ -232,7 +254,7 @@ namespace KizShop.Shop
             // Check guns with attachments or loaded magazine
             foreach (var instance in available)
             {
-                if (_inventoryGateway.HasAttachmentsOrLoadedMagazine(entry.Id, instance.State))
+                if (await _inventoryGateway.HasAttachmentsOrLoadedMagazineAsync(entry.Id, instance.State).ConfigureAwait(false))
                 {
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_gun_has_attachments" };
                 }
@@ -258,7 +280,7 @@ namespace KizShop.Shop
 
             // Calculate unit price per instance based on amount ratio and quality
             var toSell = available.Take(amountToSell).ToList();
-            byte defaultAmount = _inventoryGateway.GetDefaultAmount(entry.Id);
+            byte defaultAmount = await _inventoryGateway.GetDefaultAmountAsync(entry.Id).ConfigureAwait(false);
             var cfg = _configProvider();
 
             long totalPayoutCents = 0;
@@ -286,7 +308,7 @@ namespace KizShop.Shop
                 var removedInstances = new List<InventoryItemInstance>();
                 foreach (var inst in toSell)
                 {
-                    if (_inventoryGateway.RemoveItemByReference(steamId, inst.Item))
+                    if (await _inventoryGateway.RemoveItemByReferenceAsync(steamId, inst.Item).ConfigureAwait(false))
                     {
                         removedInstances.Add(inst);
                     }
@@ -297,7 +319,7 @@ namespace KizShop.Shop
                     // Restore any items that were removed
                     foreach (var removed in removedInstances)
                     {
-                        _inventoryGateway.TryAddItem(steamId, removed.Item);
+                        await _inventoryGateway.TryAddItemAsync(steamId, removed.Item).ConfigureAwait(false);
                     }
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
                 }
@@ -309,7 +331,7 @@ namespace KizShop.Shop
                     // Rollback: give items back if payout failed
                     foreach (var removed in removedInstances)
                     {
-                        _inventoryGateway.TryAddItem(steamId, removed.Item);
+                        await _inventoryGateway.TryAddItemAsync(steamId, removed.Item).ConfigureAwait(false);
                     }
                     KizLog.Error($"[KizShop] Payout failed for {steamId} selling {entry.Id}x{amountToSell}. Items restored.");
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
@@ -372,7 +394,8 @@ namespace KizShop.Shop
             }
 
             // Max vehicles check
-            if (_vehicleGateway.GetPlayerVehicleCount(steamId) >= cfg.MaxVehiclesPerPlayer)
+            var vehicleCount = await _vehicleGateway.GetPlayerVehicleCountAsync(steamId).ConfigureAwait(false);
+            if (vehicleCount >= cfg.MaxVehiclesPerPlayer)
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "vehicle_max_limit", ErrorArgs = new object[] { cfg.MaxVehiclesPerPlayer } };
             }
@@ -403,13 +426,13 @@ namespace KizShop.Shop
                 }
 
                 // Spawn vehicle
-                var spawnRes = _vehicleGateway.TrySpawnVehicle(steamId, entry.Id, cfg.VehicleSpawnDistance);
+                var spawnRes = await _vehicleGateway.TrySpawnVehicleAsync(steamId, entry.Id, cfg.VehicleSpawnDistance).ConfigureAwait(false);
                 if (!spawnRes.Success)
                 {
                     // Destroy handle if partially created
                     if (spawnRes.VehicleHandle != null)
                     {
-                        _vehicleGateway.DestroyVehicle(spawnRes.VehicleHandle);
+                        await _vehicleGateway.DestroyVehicleAsync(spawnRes.VehicleHandle).ConfigureAwait(false);
                     }
 
                     // Full refund

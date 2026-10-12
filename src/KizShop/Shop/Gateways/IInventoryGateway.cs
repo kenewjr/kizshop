@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using SDG.Unturned;
 
 namespace KizShop.Shop.Gateways
@@ -15,41 +16,37 @@ namespace KizShop.Shop.Gateways
         public byte[] State => Item?.state;
     }
 
+    public enum CheckSpaceReason
+    {
+        Fits,
+        PlayerNull,
+        InventoryNull,
+        AssetNotFound,
+        NoSpace
+    }
+
+    public class CheckSpaceResult
+    {
+        public bool Fits { get; set; }
+        public CheckSpaceReason Reason { get; set; }
+        public string PageDetails { get; set; }
+
+        public static CheckSpaceResult Success() =>
+            new CheckSpaceResult { Fits = true, Reason = CheckSpaceReason.Fits };
+
+        public static CheckSpaceResult Fail(CheckSpaceReason reason, string details = null) =>
+            new CheckSpaceResult { Fits = false, Reason = reason, PageDetails = details };
+    }
+
     public interface IInventoryGateway
     {
-        /// <summary>
-        /// Retrieves unequipped items in the player's personal gear pages (backpack, vest, shirt, pants).
-        /// </summary>
-        List<InventoryItemInstance> GetGearItems(ulong steamId, ushort itemId);
-
-        /// <summary>
-        /// Checks if a gun has attachments or a loaded magazine.
-        /// </summary>
-        bool HasAttachmentsOrLoadedMagazine(ushort itemId, byte[] state);
-
-        /// <summary>
-        /// Gets the asset's default amount / stack size.
-        /// </summary>
-        byte GetDefaultAmount(ushort itemId);
-
-        /// <summary>
-        /// Simulates whether the player can fit the required quantity of items.
-        /// </summary>
-        bool CheckSpace(ulong steamId, ushort itemId, int count);
-
-        /// <summary>
-        /// Adds a single item instance to player inventory.
-        /// </summary>
-        bool TryAddItem(ulong steamId, Item item);
-
-        /// <summary>
-        /// Removes an item instance by reference from player inventory.
-        /// </summary>
-        bool RemoveItemByReference(ulong steamId, Item item);
-
-        /// <summary>
-        /// Removes an item instance at the specified page and index.
-        /// </summary>
-        bool RemoveItemAt(ulong steamId, byte page, byte index);
+        Task<List<InventoryItemInstance>> GetGearItemsAsync(ulong steamId, ushort itemId);
+        Task<bool> HasAttachmentsOrLoadedMagazineAsync(ushort itemId, byte[] state);
+        Task<byte> GetDefaultAmountAsync(ushort itemId);
+        Task<CheckSpaceResult> CheckSpaceAsync(ulong steamId, ushort itemId, int count);
+        Task<Item> CreateItemAsync(ushort itemId);
+        Task<bool> TryAddItemAsync(ulong steamId, Item item);
+        Task<bool> RemoveItemByReferenceAsync(ulong steamId, Item item);
+        Task<bool> RemoveItemAtAsync(ulong steamId, byte page, byte index);
     }
 }

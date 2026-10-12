@@ -20,30 +20,34 @@ namespace KizShop.Common
                 return;
             }
 
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await asyncAction().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    lock (_errorLock)
-                    {
-                        if ((DateTime.UtcNow - _lastErrorLog).TotalSeconds >= 5)
-                        {
-                            _lastErrorLog = DateTime.UtcNow;
-                            KizLog.Error($"[KizShop] Command error for {caller?.DisplayName}: {ex}");
-                        }
-                    }
+            // Start async action on caller's thread (main thread) without Task.Run wrapping.
+            // Unawaited synchronous head executes on main thread.
+            _ = ExecuteCommandAsync(caller, plugin, asyncAction);
+        }
 
-                    plugin.Dispatcher?.QueueOnMainThread(() =>
+        private static async Task ExecuteCommandAsync(IRocketPlayer caller, KizShopPlugin plugin, Func<Task> asyncAction)
+        {
+            try
+            {
+                await asyncAction().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                lock (_errorLock)
+                {
+                    if ((DateTime.UtcNow - _lastErrorLog).TotalSeconds >= 5)
                     {
-                        string msg = plugin.Translate("command_error_generic");
-                        KizChat.Say(caller, msg, UnityEngine.Color.red);
-                    });
+                        _lastErrorLog = DateTime.UtcNow;
+                        KizLog.Error($"[KizShop] Command error for {caller?.DisplayName}: {ex}");
+                    }
                 }
-            });
+
+                plugin.Dispatcher?.QueueOnMainThread(() =>
+                {
+                    string msg = plugin.Translate("command_error_generic");
+                    KizChat.Say(caller, msg, UnityEngine.Color.red);
+                });
+            }
         }
     }
 }

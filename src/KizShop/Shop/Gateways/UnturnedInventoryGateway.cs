@@ -1,13 +1,21 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
 using Steamworks;
+using KizShop.Common;
 
 namespace KizShop.Shop.Gateways
 {
     public class UnturnedInventoryGateway : IInventoryGateway
     {
+        private readonly IMainThreadDispatcher _dispatcher;
+        private readonly Func<KizShopConfiguration> _configProvider;
+        private readonly Func<ulong, UnturnedPlayer> _playerResolver;
+
         public static readonly byte[] StoragePages = new byte[]
         {
             PlayerInventory.SLOTS,    // 2 (Hands / base player inventory grid)
@@ -17,45 +25,105 @@ namespace KizShop.Shop.Gateways
             PlayerInventory.PANTS     // 6
         };
 
-        private static readonly byte[] GearPages = StoragePages;
-
-        public List<InventoryItemInstance> GetGearItems(ulong steamId, ushort itemId)
+        public UnturnedInventoryGateway(
+            IMainThreadDispatcher dispatcher = null,
+            Func<KizShopConfiguration> configProvider = null,
+            Func<ulong, UnturnedPlayer> playerResolver = null)
         {
-            var list = new List<InventoryItemInstance>();
-            var player = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
-            if (player == null || player.Inventory == null) return list;
-
-            var inv = player.Inventory;
-            var equipment = player.Player.equipment;
-
-            foreach (byte page in StoragePages)
+            _dispatcher = dispatcher ?? KizShopPlugin.Instance?.Dispatcher ?? new RocketMainThreadDispatcher();
+            _configProvider = configProvider ?? (() => KizShopPlugin.Instance?.Configuration?.Instance ?? new KizShopConfiguration());
+            _playerResolver = playerResolver ?? (sId =>
             {
-                if (page >= inv.items.Length || inv.items[page] == null) continue;
+                try { return UnturnedPlayer.FromCSteamID(new CSteamID(sId)); }
+                catch { return null; }
+            });
+        }
 
-                var pageItems = inv.items[page];
-                byte count = pageItems.getItemCount();
-
-                for (byte i = 0; i < count; i++)
-                {
-                    var jar = pageItems.getItem(i);
-                    if (jar == null || jar.item == null || jar.item.id != itemId) continue;
-
-                    // Exclude equipped item
-                    if (equipment != null && equipment.HasValidUseable && equipment.equippedPage == page && equipment.equipped_x == jar.x && equipment.equipped_y == jar.y)
-                    {
-                        continue;
-                    }
-
-                    list.Add(new InventoryItemInstance
-                    {
-                        Page = page,
-                        Index = i,
-                        Item = jar.item
-                    });
-                }
+        private UnturnedPlayer GetPlayer(ulong steamId)
+        {
+            try
+            {
+                return _playerResolver(steamId);
             }
+            catch
+            {
+                return null;
+            }
+        }
 
-            return list;
+        private void DebugAssertMainThread(string methodName)
+        {
+            if (_dispatcher != null && !_dispatcher.IsMainThread)
+            {
+                KizLog.Error($"[KizShop] THREAD ASSERTION ERROR: {methodName} called off main thread (Thread {Thread.CurrentThread.ManagedThreadId})!");
+            }
+        }
+
+        public async Task<List<InventoryItemInstance>> GetGearItemsAsync(ulong steamId, ushort itemId)
+        {
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(GetGearItemsAsync));
+                var list = new List<InventoryItemInstance>();
+                var player = GetPlayer(steamId);
+                if (player == null || player.Inventory == null) return list;
+
+                var inv = player.Inventory;
+                var equipment = player.Player.equipment;
+
+                foreach (byte page in StoragePages)
+                {
+                    if (page >= inv.items.Length || inv.items[page] == null) continue;
+
+                    var pageItems = inv.items[page];
+                    byte count = pageItems.getItemCount();
+
+                    for (byte i = 0; i < count; i++)
+                    {
+                        var jar = pageItems.getItem(i);
+                        if (jar == null || jar.item == null || jar.item.id != itemId) continue;
+
+                        // Exclude equipped item
+                        if (equipment != null && equipment.HasValidUseable && equipment.equippedPage == page && equipment.equipped_x == jar.x && equipment.equipped_y == jar.y)
+                        {
+                            continue;
+                        }
+
+                        list.Add(new InventoryItemInstance
+                        {
+                            Page = page,
+                            Index = i,
+                            Item = jar.item
+                        });
+                    }
+                }
+
+                return list;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<bool> HasAttachmentsOrLoadedMagazineAsync(ushort itemId, byte[] state)
+        {
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(HasAttachmentsOrLoadedMagazineAsync));
+                var asset = Assets.find(EAssetType.ITEM, itemId) as ItemGunAsset;
+                if (asset == null || state == null || state.Length < 10) return false;
+
+                ushort sight = BitConverter.ToUInt16(state, 0);
+                ushort tactical = BitConverter.ToUInt16(state, 2);
+                ushort grip = BitConverter.ToUInt16(state, 4);
+                ushort barrel = BitConverter.ToUInt16(state, 6);
+                ushort magazine = BitConverter.ToUInt16(state, 8);
+
+                if (sight != 0 && sight != asset.sightID) return true;
+                if (tactical != 0 && tactical != asset.tacticalID) return true;
+                if (grip != 0 && grip != asset.gripID) return true;
+                if (barrel != 0 && barrel != asset.barrelID) return true;
+                if (magazine != 0) return true;
+
+                return false;
+            }).ConfigureAwait(false);
         }
 
         public bool HasAttachmentsOrLoadedMagazine(ushort itemId, byte[] state)
@@ -78,83 +146,122 @@ namespace KizShop.Shop.Gateways
             return false;
         }
 
+        public async Task<byte> GetDefaultAmountAsync(ushort itemId)
+        {
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(GetDefaultAmountAsync));
+                return GetDefaultAmount(itemId);
+            }).ConfigureAwait(false);
+        }
+
         public byte GetDefaultAmount(ushort itemId)
         {
             var asset = Assets.find(EAssetType.ITEM, itemId) as ItemAsset;
             return (asset != null && asset.amount > 0) ? asset.amount : (byte)1;
         }
 
-        public bool CheckSpace(ulong steamId, ushort itemId, int count)
+        public async Task<Item> CreateItemAsync(ushort itemId)
         {
-            var player = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
-            if (player == null || player.Inventory == null) return false;
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(CreateItemAsync));
+                return new Item(itemId, true);
+            }).ConfigureAwait(false);
+        }
 
-            var asset = Assets.find(EAssetType.ITEM, itemId) as ItemAsset;
-            if (asset == null) return true;
+        public async Task<CheckSpaceResult> CheckSpaceAsync(ulong steamId, ushort itemId, int count)
+        {
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(CheckSpaceAsync));
+                return CheckSpaceInternal(steamId, itemId, count);
+            }).ConfigureAwait(false);
+        }
 
-            byte sizeX = asset.size_x;
-            byte sizeY = asset.size_y;
-            byte maxStack = asset.amount > 0 ? asset.amount : (byte)1;
-            int stacksNeeded = (int)Math.Ceiling((double)count / maxStack);
-            if (stacksNeeded <= 0) return true;
+        private CheckSpaceResult CheckSpaceInternal(ulong steamId, ushort itemId, int count)
+        {
+            if (count <= 0) return CheckSpaceResult.Success();
+
+            var player = GetPlayer(steamId);
+            if (player == null)
+            {
+                return CheckSpaceResult.Fail(CheckSpaceReason.PlayerNull, "Player not found");
+            }
 
             var inv = player.Inventory;
-
-            // Fast path for 1 stack: native Unturned tryFindSpace across all valid storage pages (SLOTS..PAGES-2)
-            if (stacksNeeded == 1)
+            if (inv == null || inv.items == null)
             {
-                if (inv.tryFindSpace(sizeX, sizeY, out _, out _, out _, out _))
-                {
-                    return true;
-                }
+                return CheckSpaceResult.Fail(CheckSpaceReason.InventoryNull, "Player inventory is null");
+            }
 
-                // Check auto-equip weapon into empty primary/secondary
-                if (asset is ItemWeaponAsset weaponAsset)
-                {
-                    if (weaponAsset.slot == ESlotType.PRIMARY && (inv.items[0] == null || inv.items[0].getItemCount() == 0)) return true;
-                    if (weaponAsset.slot == ESlotType.SECONDARY && (inv.items[1] == null || inv.items[1].getItemCount() == 0)) return true;
-                    if (weaponAsset.slot == ESlotType.ANY && ((inv.items[0] == null || inv.items[0].getItemCount() == 0) || (inv.items[1] == null || inv.items[1].getItemCount() == 0))) return true;
-                }
+            var asset = Assets.find(EAssetType.ITEM, itemId) as ItemAsset;
+            if (asset == null)
+            {
+                return CheckSpaceResult.Fail(CheckSpaceReason.AssetNotFound, $"Item asset {itemId} not found");
+            }
 
-                // Check auto-equip clothing into empty clothing slot
-                var clothing = player.Player.clothing;
-                if (clothing != null && asset is ItemClothingAsset clothingAsset)
-                {
-                    if (clothingAsset.type == EItemType.BACKPACK && clothing.backpack == 0) return true;
-                    if (clothingAsset.type == EItemType.VEST && clothing.vest == 0) return true;
-                    if (clothingAsset.type == EItemType.SHIRT && clothing.shirt == 0) return true;
-                    if (clothingAsset.type == EItemType.PANTS && clothing.pants == 0) return true;
-                    if (clothingAsset.type == EItemType.HAT && clothing.hat == 0) return true;
-                    if (clothingAsset.type == EItemType.MASK && clothing.mask == 0) return true;
-                    if (clothingAsset.type == EItemType.GLASSES && clothing.glasses == 0) return true;
-                }
+            byte sizeX = asset.size_x > 0 ? asset.size_x : (byte)1;
+            byte sizeY = asset.size_y > 0 ? asset.size_y : (byte)1;
+            string assetName = asset.itemName ?? itemId.ToString();
 
+            bool fits = SimulatePlacement(inv, sizeX, sizeY, count, out string details);
+
+            var cfg = _configProvider();
+            bool verbose = cfg.VerboseInventoryLogging;
+
+            if (verbose)
+            {
+                KizLog.Info($"[KizShop] CheckSpace DEBUG: SteamID {steamId}, Item {itemId} ('{assetName}', {sizeX}x{sizeY}), Count {count}, Fits={fits}, Thread={Thread.CurrentThread.ManagedThreadId}. Details: {details}");
+            }
+
+            if (!fits)
+            {
+                KizLog.Warning($"[KizShop] CheckSpace NO SPACE for SteamID {steamId}, Item {itemId} ('{assetName}', {sizeX}x{sizeY}), Count {count}. Thread={Thread.CurrentThread.ManagedThreadId}. Details: {details}");
+                return CheckSpaceResult.Fail(CheckSpaceReason.NoSpace, details);
+            }
+
+            return CheckSpaceResult.Success();
+        }
+
+        // NOTE: PlayerInventory.tryFindSpace cannot reserve cells across multiple instances in-memory
+        // without mutating live inventory; 2D grid reservation simulation is used to guarantee accuracy.
+        public static bool SimulatePlacement(
+            PlayerInventory inv,
+            byte sizeX,
+            byte sizeY,
+            int count,
+            out string details)
+        {
+            var sb = new StringBuilder();
+            if (count <= 0)
+            {
+                details = "Count <= 0";
+                return true;
+            }
+
+            if (ReferenceEquals(inv, null) || inv.items == null)
+            {
+                details = "Inventory is null";
                 return false;
             }
 
-            // Multi-stack check: simulate placement across all storage pages (Hands, Backpack, Vest, Shirt, Pants)
-            return CheckMultiStackSpace(inv, sizeX, sizeY, stacksNeeded);
-        }
-
-        public static bool CheckMultiStackSpace(PlayerInventory inv, byte sizeX, byte sizeY, int stacksNeeded)
-        {
-            if (stacksNeeded <= 0) return true;
-            if (ReferenceEquals(inv, null) || inv.items == null) return false;
-
-            int remaining = stacksNeeded;
+            // Build occupancy grids per storage page
+            var grids = new Dictionary<byte, bool[,]>();
+            var dims = new Dictionary<byte, (byte w, byte h)>();
 
             foreach (byte page in StoragePages)
             {
                 if (page >= inv.items.Length || inv.items[page] == null) continue;
-
                 var pageItems = inv.items[page];
                 byte w = pageItems.width;
                 byte h = pageItems.height;
                 if (w == 0 || h == 0) continue;
 
-                // Build occupancy grid for this page
-                bool[,] grid = new bool[w, h];
+                dims[page] = (w, h);
+                var grid = new bool[w, h];
                 byte itemCount = pageItems.getItemCount();
+
                 for (byte i = 0; i < itemCount; i++)
                 {
                     var jar = pageItems.getItem(i);
@@ -169,52 +276,69 @@ namespace KizShop.Shop.Gateways
                     }
                 }
 
-                // Simulate placing items on this page
-                while (remaining > 0)
+                grids[page] = grid;
+                sb.Append($"[P{page}: {w}x{h}, {itemCount} items] ");
+            }
+
+            int placed = 0;
+
+            // Simulate placing required instances one by one
+            for (int i = 0; i < count; i++)
+            {
+                bool instancePlaced = false;
+
+                foreach (byte page in StoragePages)
                 {
-                    bool placed = false;
+                    if (!grids.TryGetValue(page, out var grid)) continue;
+                    var (w, h) = dims[page];
 
                     // Unrotated
-                    for (int y = 0; y <= h - sizeY && !placed; y++)
+                    for (int y = 0; y <= h - sizeY && !instancePlaced; y++)
                     {
-                        for (int x = 0; x <= w - sizeX && !placed; x++)
+                        for (int x = 0; x <= w - sizeX && !instancePlaced; x++)
                         {
                             if (CanPlace(grid, x, y, sizeX, sizeY))
                             {
                                 Place(grid, x, y, sizeX, sizeY);
-                                placed = true;
-                                remaining--;
-                                if (remaining <= 0) return true;
+                                instancePlaced = true;
+                                placed++;
+                                break;
                             }
                         }
                     }
 
-                    // Rotated (if not square)
-                    if (!placed && sizeX != sizeY)
+                    // Rotated (if non-square)
+                    if (!instancePlaced && sizeX != sizeY)
                     {
-                        for (int y = 0; y <= h - sizeX && !placed; y++)
+                        for (int y = 0; y <= h - sizeX && !instancePlaced; y++)
                         {
-                            for (int x = 0; x <= w - sizeY && !placed; x++)
+                            for (int x = 0; x <= w - sizeY && !instancePlaced; x++)
                             {
                                 if (CanPlace(grid, x, y, sizeY, sizeX))
                                 {
                                     Place(grid, x, y, sizeY, sizeX);
-                                    placed = true;
-                                    remaining--;
-                                    if (remaining <= 0) return true;
+                                    instancePlaced = true;
+                                    placed++;
+                                    break;
                                 }
                             }
                         }
                     }
 
-                    if (!placed)
-                    {
-                        break;
-                    }
+                    if (instancePlaced) break;
+                }
+
+                if (!instancePlaced)
+                {
+                    sb.Append($"Failed at instance {i + 1}/{count}");
+                    details = sb.ToString();
+                    return false;
                 }
             }
 
-            return remaining <= 0;
+            sb.Append($"Placed {placed}/{count} instances successfully");
+            details = sb.ToString();
+            return true;
         }
 
         private static bool CanPlace(bool[,] grid, int startX, int startY, byte sizeX, byte sizeY)
@@ -240,47 +364,59 @@ namespace KizShop.Shop.Gateways
             }
         }
 
-        public bool TryAddItem(ulong steamId, Item item)
+        public async Task<bool> TryAddItemAsync(ulong steamId, Item item)
         {
-            var player = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
-            if (player == null || player.Inventory == null || item == null) return false;
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(TryAddItemAsync));
+                var player = GetPlayer(steamId);
+                if (player == null || player.Inventory == null || item == null) return false;
 
-            return player.Inventory.tryAddItem(item, true);
+                return player.Inventory.tryAddItem(item, true);
+            }).ConfigureAwait(false);
         }
 
-        public bool RemoveItemByReference(ulong steamId, Item item)
+        public async Task<bool> RemoveItemByReferenceAsync(ulong steamId, Item item)
         {
-            if (item == null) return false;
-            var player = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
-            if (player == null || player.Inventory == null) return false;
-
-            var inv = player.Inventory;
-            for (byte page = 0; page < inv.items.Length; page++)
+            return await _dispatcher.RunOnMainThreadAsync(() =>
             {
-                var pageItems = inv.items[page];
-                if (pageItems == null) continue;
+                DebugAssertMainThread(nameof(RemoveItemByReferenceAsync));
+                if (item == null) return false;
+                var player = GetPlayer(steamId);
+                if (player == null || player.Inventory == null) return false;
 
-                for (int i = pageItems.getItemCount() - 1; i >= 0; i--)
+                var inv = player.Inventory;
+                for (byte page = 0; page < inv.items.Length; page++)
                 {
-                    var jar = pageItems.getItem((byte)i);
-                    if (jar != null && ReferenceEquals(jar.item, item))
+                    var pageItems = inv.items[page];
+                    if (pageItems == null) continue;
+
+                    for (int i = pageItems.getItemCount() - 1; i >= 0; i--)
                     {
-                        inv.removeItem(page, (byte)i);
-                        return true;
+                        var jar = pageItems.getItem((byte)i);
+                        if (jar != null && ReferenceEquals(jar.item, item))
+                        {
+                            inv.removeItem(page, (byte)i);
+                            return true;
+                        }
                     }
                 }
-            }
 
-            return false;
+                return false;
+            }).ConfigureAwait(false);
         }
 
-        public bool RemoveItemAt(ulong steamId, byte page, byte index)
+        public async Task<bool> RemoveItemAtAsync(ulong steamId, byte page, byte index)
         {
-            var player = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
-            if (player == null || player.Inventory == null) return false;
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(RemoveItemAtAsync));
+                var player = GetPlayer(steamId);
+                if (player == null || player.Inventory == null) return false;
 
-            player.Inventory.removeItem(page, index);
-            return true;
+                player.Inventory.removeItem(page, index);
+                return true;
+            }).ConfigureAwait(false);
         }
     }
 }

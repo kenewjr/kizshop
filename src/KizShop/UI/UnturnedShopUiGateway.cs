@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using SDG.NetTransport;
 using SDG.Unturned;
 using Steamworks;
@@ -8,66 +10,106 @@ namespace KizShop.UI
 {
     public class UnturnedShopUiGateway : IShopUiGateway
     {
-        public bool OpenUi(ulong steamId, ushort effectId, short key)
-        {
-            try
-            {
-                var player = PlayerTool.getPlayer(new CSteamID(steamId));
-                if (player == null) return false;
+        private readonly IMainThreadDispatcher _dispatcher;
 
-                var effectAsset = Assets.find(EAssetType.EFFECT, effectId);
-                if (effectAsset == null)
+        public UnturnedShopUiGateway(IMainThreadDispatcher dispatcher = null)
+        {
+            _dispatcher = dispatcher ?? KizShopPlugin.Instance?.Dispatcher ?? new RocketMainThreadDispatcher();
+        }
+
+        private void DebugAssertMainThread(string methodName)
+        {
+            if (_dispatcher != null && !_dispatcher.IsMainThread)
+            {
+                KizLog.Error($"[KizShop] THREAD ASSERTION ERROR: {methodName} called off main thread (Thread {Thread.CurrentThread.ManagedThreadId})!");
+            }
+        }
+
+        public async Task<bool> OpenUiAsync(ulong steamId, ushort effectId, short key)
+        {
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(OpenUiAsync));
+                try
                 {
-                    KizLog.Warning($"[KizShop] Visual UI Effect ID {effectId} is not loaded on this server. Skipping sendUIEffect.");
+                    var player = PlayerTool.getPlayer(new CSteamID(steamId));
+                    if (player == null) return false;
+
+                    var effectAsset = Assets.find(EAssetType.EFFECT, effectId);
+                    if (effectAsset == null)
+                    {
+                        KizLog.Warning($"[KizShop] OpenUi: Visual UI Effect ID {effectId} is not loaded on this server. Skipping.");
+                        return false;
+                    }
+
+                    EffectManager.sendUIEffect(effectId, key, player.channel.GetOwnerTransportConnection(), true);
+                    player.enablePluginWidgetFlag(EPluginWidgetFlags.Modal);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] UnturnedShopUiGateway.OpenUi (Effect {effectId}) error: {ex}");
                     return false;
                 }
-
-                EffectManager.sendUIEffect(effectId, key, player.channel.GetOwnerTransportConnection(), true);
-                player.enablePluginWidgetFlag(EPluginWidgetFlags.Modal);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                KizLog.Error($"[KizShop] Failed to open UI effect {effectId}: {ex.Message}");
-                return false;
-            }
+            }).ConfigureAwait(false);
         }
 
-        public void CloseUi(ulong steamId, ushort effectId, short key)
+        public async Task CloseUiAsync(ulong steamId, ushort effectId, short key)
         {
-            try
+            await _dispatcher.RunOnMainThreadAsync(() =>
             {
-                var player = PlayerTool.getPlayer(new CSteamID(steamId));
-                if (player == null) return;
+                DebugAssertMainThread(nameof(CloseUiAsync));
+                try
+                {
+                    var player = PlayerTool.getPlayer(new CSteamID(steamId));
+                    if (player == null) return;
 
-                EffectManager.askEffectClearByID(effectId, player.channel.GetOwnerTransportConnection());
-                player.disablePluginWidgetFlag(EPluginWidgetFlags.Modal);
-            }
-            catch { }
+                    EffectManager.askEffectClearByID(effectId, player.channel.GetOwnerTransportConnection());
+                    player.disablePluginWidgetFlag(EPluginWidgetFlags.Modal);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] UnturnedShopUiGateway.CloseUi (Effect {effectId}) error: {ex}");
+                }
+            }).ConfigureAwait(false);
         }
 
-        public void UpdateText(ulong steamId, short key, string elementName, string text)
+        public async Task UpdateTextAsync(ulong steamId, short key, string elementName, string text)
         {
-            try
+            await _dispatcher.RunOnMainThreadAsync(() =>
             {
-                var player = PlayerTool.getPlayer(new CSteamID(steamId));
-                if (player == null) return;
+                DebugAssertMainThread(nameof(UpdateTextAsync));
+                try
+                {
+                    var player = PlayerTool.getPlayer(new CSteamID(steamId));
+                    if (player == null) return;
 
-                EffectManager.sendUIEffectText(key, player.channel.GetOwnerTransportConnection(), true, elementName, text ?? string.Empty);
-            }
-            catch { }
+                    EffectManager.sendUIEffectText(key, player.channel.GetOwnerTransportConnection(), true, elementName, text ?? string.Empty);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] UnturnedShopUiGateway.UpdateText ({elementName}, Key {key}) error: {ex}");
+                }
+            }).ConfigureAwait(false);
         }
 
-        public void UpdateVisibility(ulong steamId, short key, string elementName, bool visible)
+        public async Task UpdateVisibilityAsync(ulong steamId, short key, string elementName, bool visible)
         {
-            try
+            await _dispatcher.RunOnMainThreadAsync(() =>
             {
-                var player = PlayerTool.getPlayer(new CSteamID(steamId));
-                if (player == null) return;
+                DebugAssertMainThread(nameof(UpdateVisibilityAsync));
+                try
+                {
+                    var player = PlayerTool.getPlayer(new CSteamID(steamId));
+                    if (player == null) return;
 
-                EffectManager.sendUIEffectVisibility(key, player.channel.GetOwnerTransportConnection(), true, elementName, visible);
-            }
-            catch { }
+                    EffectManager.sendUIEffectVisibility(key, player.channel.GetOwnerTransportConnection(), true, elementName, visible);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] UnturnedShopUiGateway.UpdateVisibility ({elementName}, Key {key}) error: {ex}");
+                }
+            }).ConfigureAwait(false);
         }
     }
 }

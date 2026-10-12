@@ -21,14 +21,22 @@ namespace KizShop.Commands
             {
                 var plugin = KizShopPlugin.Instance;
 
+                bool uiAttempted = false;
                 if (command.Length == 0 &&
                     caller is Rocket.Unturned.Player.UnturnedPlayer uPlayer &&
                     plugin.Configuration.Instance.UseVisualUiForShopCommand &&
                     plugin.Configuration.Instance.EnableVisualUI &&
                     plugin.ShopUi != null)
                 {
+                    uiAttempted = true;
                     bool opened = await plugin.ShopUi.OpenShopAsync(uPlayer.CSteamID.m_SteamID).ConfigureAwait(false);
                     if (opened) return;
+                }
+
+                if (uiAttempted)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("shop_ui_unavailable"), UnityEngine.Color.yellow));
                 }
 
                 int page = 1;

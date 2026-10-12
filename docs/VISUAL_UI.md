@@ -1,5 +1,12 @@
 # Panduan In-Game Visual UI KizShop
 
+> [!IMPORTANT]
+> **Unity AssetBundle + Client-Side Workshop Mod REQUIRED**
+> - Antarmuka visual (Visual UI) memerlukan **Unity AssetBundle** dan mod Workshop di sisi client/server.
+> - Asset bundle ini **TIDAK dihasilkan** oleh build repository ini (kode repo ini hanya berisi plugin C# server-side).
+> - Tanpa bundle mod tersebut, sistem toko chat (`/shop`, `/buy`, `/sell`, `/cost`) adalah **jalur utama yang didukung penuh**.
+> - Karena itu, konfigurasi `EnableVisualUI` default diatur ke `false` sampai bundle aset mod disediakan di server.
+
 ## 1. Mengapa Visual UI Memerlukan Effect Asset?
 
 Di Unturned (versi 3.x), antarmuka grafis (UI) kustom untuk plugin **bukan merupakan bawaan kode C#**, melainkan menggunakan sistem **EffectAsset** Unturned (`EffectManager.sendUIEffect`).

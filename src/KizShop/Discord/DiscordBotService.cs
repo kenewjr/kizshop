@@ -54,7 +54,6 @@ namespace KizShop.Discord
             try
             {
                 _cts?.Cancel();
-                _botLoopTask?.Wait(2000);
             }
             catch { }
         }
@@ -293,7 +292,7 @@ namespace KizShop.Discord
                     return "❌ Invalid SteamID64.";
                 }
 
-                if (!decimal.TryParse(parts[3], out decimal amountDecimal))
+                if (!decimal.TryParse(parts[3], System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out decimal amountDecimal))
                 {
                     return "❌ Invalid number format for amount.";
                 }

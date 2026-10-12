@@ -5,12 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-10-12
+
+### Fixed
+- **Main-Thread Marshalling**:
+  - Extended `IMainThreadDispatcher` with awaitable `RunOnMainThreadAsync<T>` and `RunOnMainThreadAsync(Action)` via `TaskCompletionSource` with `RunContinuationsAsynchronously`.
+  - Main thread ID captured on plugin load.
+  - Marshalled all SDG.Unturned and UnityEngine calls through the dispatcher: `UnturnedInventoryGateway`, `UnturnedVehicleGateway`, `UnturnedShopUiGateway`, and player lookups.
+  - Gateways and services updated with asynchronous signatures (`Task` / `Task<T>`).
+  - Added debug thread assertions to detect off-main-thread game API calls.
+  - Updated `CommandRunner` to initiate execution on caller thread without `Task.Run` wrapping.
+- **Inventory Space Check (`CheckSpace`) Rewrite**:
+  - Delivery creates `count` distinct Item instances; removed invalid `stacksNeeded = ceil(count / asset.amount)` math.
+  - Implemented cell-reservation 2D grid simulation per instance across hands and gear pages (`SLOTS`, `BACKPACK`, `VEST`, `SHIRT`, `PANTS`), honoring dimensions and rotation without mutating live inventory.
+  - Introduced `CheckSpaceResult` with explicit reason codes (`PlayerNull`, `InventoryNull`, `AssetNotFound`, `NoSpace`) mapped to specific localization keys (`buy_player_unavailable`, `buy_item_unknown`, `buy_no_space`).
+  - Added configurable `VerboseInventoryLogging` debug diagnostics and warning logs on `NoSpace`.
+- **Item Creation & Delivery Rollback**:
+  - Switched item generation to `new Item(id, true)` so default state, quality, and amounts match game asset definitions.
+  - Track delivery failures by index; roll back added items by reference and issue full refunds.
+- **Catalog Asset Validation**:
+  - On plugin load (main thread), verified all catalog entries with `Assets.find(EAssetType.ITEM, id)`. Missing assets logged and marked unavailable.
+  - Corrected default catalog item 81 name to match vanilla Unturned asset name "MRE".
+- **Visual UI Hardening**:
+  - Removed empty catch blocks in `UnturnedShopUiGateway` and added `KizLog.Error` logging with method name and effect ID.
+  - Verified effect asset existence before setting `Modal` plugin widget flag.
+  - Added `shop_ui_unavailable` notice in `/shop` before chat fallback catalog.
+  - `ShopUiService` slot actions deliver localized chat feedback matching `/buy` and `/sell`.
+  - Disconnect and plugin unload clean up UI player states; unsubscribed button event handler on unload.
+  - Set default `EnableVisualUI` to `false` until an AssetBundle is installed.
+- **Discord & Cleanup**:
+  - Removed dead code in `InventoryHelper.cs` and routed legacy checks to `SimulatePlacement`.
+  - Replaced blocking `Wait(2000)` in `DiscordBotService.Stop()` with CancellationToken cancellation.
+  - Parsed Discord bot numbers with `CultureInfo.InvariantCulture`.
+
 ## [0.2.2] - 2026-10-11
 
 ### Fixed
 - **Inventory Space Check (`CheckSpace`)**:
-  - Added `PlayerInventory.SLOTS` (Page 2: "Hands" / base player inventory grid) to `StoragePages`. Naked players or players without equipped backpacks/vests are no longer falsely rejected with "Not enough inventory space" when their hands inventory is empty.
-  - Fixed multi-stack purchasing: replaced page-counting logic with exact 2D grid placement simulation with rotation support, allowing multi-item purchases (`/buy <item> <amount>`) to properly fill available storage slots.
+  - Preliminary attempt to include `PlayerInventory.SLOTS` (Page 2: "Hands" / base player inventory grid) to `StoragePages`. *(Note: fully resolved in 0.2.3 with thread-safe instance reservation simulation).*
   - Included Page 2 in `GetGearItems` so items stored in hands inventory can be sold via `/sell`.
 
 ## [0.2.1] - 2026-10-11

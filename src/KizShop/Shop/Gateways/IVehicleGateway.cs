@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using SDG.Unturned;
 
 namespace KizShop.Shop.Gateways
@@ -22,8 +23,8 @@ namespace KizShop.Shop.Gateways
 
     public interface IVehicleGateway
     {
-        int GetPlayerVehicleCount(ulong steamId);
-        VehicleSpawnResult TrySpawnVehicle(ulong steamId, ushort vehicleId, float desiredDistance);
-        void DestroyVehicle(object vehicleHandle);
+        Task<int> GetPlayerVehicleCountAsync(ulong steamId);
+        Task<VehicleSpawnResult> TrySpawnVehicleAsync(ulong steamId, ushort vehicleId, float desiredDistance);
+        Task DestroyVehicleAsync(object vehicleHandle);
     }
 }

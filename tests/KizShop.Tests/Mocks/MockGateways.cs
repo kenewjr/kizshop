@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using SDG.Unturned;
 using KizShop.Common;
 using KizShop.Shop.Gateways;
@@ -14,9 +15,43 @@ namespace KizShop.Tests.Mocks
 
     public class TestMainThreadDispatcher : IMainThreadDispatcher
     {
+        public int CapturedThreadId { get; set; } = System.Threading.Thread.CurrentThread.ManagedThreadId;
+        public bool IsMainThread => System.Threading.Thread.CurrentThread.ManagedThreadId == CapturedThreadId;
+
         public void QueueOnMainThread(System.Action action)
         {
             action?.Invoke();
+        }
+
+        public Task<T> RunOnMainThreadAsync<T>(Func<T> func)
+        {
+            if (func == null) return Task.FromResult(default(T));
+            try
+            {
+                return Task.FromResult(func());
+            }
+            catch (Exception ex)
+            {
+                var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+                tcs.SetException(ex);
+                return tcs.Task;
+            }
+        }
+
+        public Task RunOnMainThreadAsync(System.Action action)
+        {
+            if (action == null) return Task.CompletedTask;
+            try
+            {
+                action();
+                return Task.CompletedTask;
+            }
+            catch (Exception ex)
+            {
+                var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                tcs.SetException(ex);
+                return tcs.Task;
+            }
         }
     }
 
@@ -24,6 +59,7 @@ namespace KizShop.Tests.Mocks
     {
         public List<InventoryItemInstance> GearItems { get; set; } = new List<InventoryItemInstance>();
         public bool HasSpace { get; set; } = true;
+        public CheckSpaceReason SpaceReason { get; set; } = CheckSpaceReason.Fits;
         public int MaxDeliveryCountBeforeFailure { get; set; } = int.MaxValue;
         public bool ThrowOnDelivery { get; set; } = false;
 
@@ -32,51 +68,61 @@ namespace KizShop.Tests.Mocks
         public HashSet<ushort> GunItemsWithAttachments { get; } = new HashSet<ushort>();
         public Dictionary<ushort, byte> DefaultAmounts { get; } = new Dictionary<ushort, byte>();
 
-        public List<InventoryItemInstance> GetGearItems(ulong steamId, ushort itemId)
+        public Task<List<InventoryItemInstance>> GetGearItemsAsync(ulong steamId, ushort itemId)
         {
-            return GearItems.Where(i => i.ItemId == itemId).ToList();
+            return Task.FromResult(GearItems.Where(i => i.ItemId == itemId).ToList());
         }
 
-        public bool HasAttachmentsOrLoadedMagazine(ushort itemId, byte[] state)
+        public Task<bool> HasAttachmentsOrLoadedMagazineAsync(ushort itemId, byte[] state)
         {
-            return GunItemsWithAttachments.Contains(itemId);
+            return Task.FromResult(GunItemsWithAttachments.Contains(itemId));
         }
 
-        public byte GetDefaultAmount(ushort itemId)
+        public Task<byte> GetDefaultAmountAsync(ushort itemId)
         {
-            return DefaultAmounts.TryGetValue(itemId, out var amt) ? amt : (byte)1;
+            return Task.FromResult(DefaultAmounts.TryGetValue(itemId, out var amt) ? amt : (byte)1);
         }
 
-        public bool CheckSpace(ulong steamId, ushort itemId, int count)
+        public Task<CheckSpaceResult> CheckSpaceAsync(ulong steamId, ushort itemId, int count)
         {
-            return HasSpace;
+            if (HasSpace)
+            {
+                return Task.FromResult(CheckSpaceResult.Success());
+            }
+            return Task.FromResult(CheckSpaceResult.Fail(SpaceReason, "Mock detail"));
         }
 
-        public bool TryAddItem(ulong steamId, Item item)
+        public Task<Item> CreateItemAsync(ushort itemId)
+        {
+            byte defaultAmount = DefaultAmounts.TryGetValue(itemId, out var amt) ? amt : (byte)1;
+            return Task.FromResult(new Item(itemId, defaultAmount, 100, new byte[16]));
+        }
+
+        public Task<bool> TryAddItemAsync(ulong steamId, Item item)
         {
             if (ThrowOnDelivery) throw new InvalidOperationException("Simulated inventory crash");
-            if (DeliveredItems.Count >= MaxDeliveryCountBeforeFailure) return false;
+            if (DeliveredItems.Count >= MaxDeliveryCountBeforeFailure) return Task.FromResult(false);
 
             DeliveredItems.Add(item);
-            return true;
+            return Task.FromResult(true);
         }
 
-        public bool RemoveItemByReference(ulong steamId, Item item)
+        public Task<bool> RemoveItemByReferenceAsync(ulong steamId, Item item)
         {
             RemovedByReferenceItems.Add(item);
             GearItems.RemoveAll(i => ReferenceEquals(i.Item, item));
-            return true;
+            return Task.FromResult(true);
         }
 
-        public bool RemoveItemAt(ulong steamId, byte page, byte index)
+        public Task<bool> RemoveItemAtAsync(ulong steamId, byte page, byte index)
         {
             var match = GearItems.FirstOrDefault(i => i.Page == page && i.Index == index);
             if (match != null)
             {
                 GearItems.Remove(match);
-                return true;
+                return Task.FromResult(true);
             }
-            return false;
+            return Task.FromResult(false);
         }
     }
 
@@ -86,19 +132,20 @@ namespace KizShop.Tests.Mocks
         public bool SpawnSucceeds { get; set; } = true;
         public bool DestroyCalled { get; private set; } = false;
 
-        public int GetPlayerVehicleCount(ulong steamId) => ActiveVehicleCount;
+        public Task<int> GetPlayerVehicleCountAsync(ulong steamId) => Task.FromResult(ActiveVehicleCount);
 
-        public VehicleSpawnResult TrySpawnVehicle(ulong steamId, ushort vehicleId, float desiredDistance)
+        public Task<VehicleSpawnResult> TrySpawnVehicleAsync(ulong steamId, ushort vehicleId, float desiredDistance)
         {
-            if (!SpawnSucceeds) return VehicleSpawnResult.Failed("Terrain collision");
+            if (!SpawnSucceeds) return Task.FromResult(VehicleSpawnResult.Failed("Terrain collision"));
             ActiveVehicleCount++;
-            return VehicleSpawnResult.Succeeded(new object());
+            return Task.FromResult(VehicleSpawnResult.Succeeded(new object()));
         }
 
-        public void DestroyVehicle(object vehicleHandle)
+        public Task DestroyVehicleAsync(object vehicleHandle)
         {
             DestroyCalled = true;
             if (ActiveVehicleCount > 0) ActiveVehicleCount--;
+            return Task.CompletedTask;
         }
     }
 }

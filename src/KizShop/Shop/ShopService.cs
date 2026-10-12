@@ -395,7 +395,7 @@ namespace KizShop.Shop
                     new ItemShopEntry { Id = 253, Name = "Alicepack", BuyPrice = 250.00m, SellPrice = 80.00m, Enabled = true },
                     new ItemShopEntry { Id = 18, Name = "Timberwolf", BuyPrice = 500.00m, SellPrice = 150.00m, Enabled = true },
                     new ItemShopEntry { Id = 20, Name = "Timberwolf Magazine", BuyPrice = 75.00m, SellPrice = 25.00m, Enabled = true },
-                    new ItemShopEntry { Id = 81, Name = "Military MRE", BuyPrice = 20.00m, SellPrice = 5.00m, Enabled = true },
+                    new ItemShopEntry { Id = 81, Name = "MRE", BuyPrice = 20.00m, SellPrice = 5.00m, Enabled = true },
                     new ItemShopEntry { Id = 14, Name = "Bottled Water", BuyPrice = 10.00m, SellPrice = 2.00m, Enabled = true }
                 },
                 Vehicles = new List<VehicleShopEntry>

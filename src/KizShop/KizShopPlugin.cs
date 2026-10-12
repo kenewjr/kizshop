@@ -83,6 +83,9 @@ namespace KizShop
             { "buy_max_amount", "<color=red>You cannot purchase more than {0} at a time.</color>" },
             { "buy_insufficient_funds", "<color=red>You need {0} to buy {1}x {2}, but only have {3}.</color>" },
             { "buy_no_space", "<color=red>Not enough inventory space to receive {0}x {1}.</color>" },
+            { "buy_player_unavailable", "<color=red>Player unavailable.</color>" },
+            { "buy_item_unknown", "<color=red>Item asset ID {0} does not exist on server.</color>" },
+            { "shop_ui_unavailable", "<color=yellow>Visual UI is unavailable. Using chat catalog.</color>" },
             { "buy_success", "<color=green>Bought {0}x {1} for {2}. Remaining balance: {3}.</color>" },
             { "buy_failed_refunded", "<color=red>Item delivery failed. Your purchase was canceled and refunded in full.</color>" },
 
@@ -140,6 +143,11 @@ namespace KizShop
         {
             Instance = this;
 
+            if (Dispatcher is RocketMainThreadDispatcher rDispatcher)
+            {
+                rDispatcher.SetMainThreadId(Thread.CurrentThread.ManagedThreadId);
+            }
+
             try
             {
                 // 1. Initialize Storage
@@ -182,6 +190,7 @@ namespace KizShop
                 // 3. Initialize Shop Service & Transactions
                 Shop = new ShopService(Directory, () => Configuration.Instance.AllowSellAboveBuy);
                 Shop.Load();
+                ValidateCatalogOnLoad();
 
                 Transactions = new ShopTransactionService(
                     Shop,
@@ -231,6 +240,7 @@ namespace KizShop
                 // 6. Hook Game Events
                 UnturnedPlayerEvents.OnPlayerDeath += HandlePlayerDeath;
                 UnturnedPlayerEvents.OnPlayerUpdateStat += HandlePlayerStat;
+                Rocket.Unturned.U.Events.OnPlayerDisconnected += HandlePlayerDisconnected;
 
                 // 7. Start Playtime Income Loop
                 StartPlaytimeLoop();
@@ -247,12 +257,15 @@ namespace KizShop
         protected override void Unload()
         {
             EffectManager.onEffectButtonClicked -= OnEffectButtonClicked;
+            Rocket.Unturned.U.Events.OnPlayerDisconnected -= HandlePlayerDisconnected;
 
             StopPlaytimeLoop();
             StopLogPruneLoop();
 
             UnturnedPlayerEvents.OnPlayerDeath -= HandlePlayerDeath;
             UnturnedPlayerEvents.OnPlayerUpdateStat -= HandlePlayerStat;
+
+            ShopUi?.ClearAllStates();
 
             if (DiscordBot != null)
             {
@@ -322,6 +335,43 @@ namespace KizShop
                     KizLog.Error($"[KizShop] Error in OnEffectButtonClicked for {steamId}: {ex}");
                 }
             });
+        }
+
+        private void HandlePlayerDisconnected(UnturnedPlayer player)
+        {
+            if (player != null)
+            {
+                ShopUi?.CloseShop(player.CSteamID.m_SteamID);
+            }
+        }
+
+        private void ValidateCatalogOnLoad()
+        {
+            try
+            {
+                var items = Shop.GetItems();
+                foreach (var item in items)
+                {
+                    var asset = Assets.find(EAssetType.ITEM, item.Id) as ItemAsset;
+                    if (asset == null)
+                    {
+                        Logger.LogWarning($"[KizShop] Catalog item ID {item.Id} ('{item.Name}') not found in game assets! Marking unavailable.");
+                        item.Enabled = false;
+                    }
+                    else
+                    {
+                        if (!string.IsNullOrEmpty(asset.itemName))
+                        {
+                            item.Name = asset.itemName;
+                        }
+                        Logger.Log($"[KizShop] Catalog item ID {item.Id}: assetName='{asset.itemName}', size={asset.size_x}x{asset.size_y}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[KizShop] Catalog asset validation encountered error: {ex.Message}");
+            }
         }
 
         public string FormatMoney(Money amount)

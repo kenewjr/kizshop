@@ -41,11 +41,14 @@ namespace KizShop
         public int ShopItemsPerPage { get; set; } = 8;
 
         // Visual UI settings
-        public bool EnableVisualUI { get; set; } = true;
+        public bool EnableVisualUI { get; set; } = false;
         public ushort UIEffectId { get; set; } = 32001;
         public short UIKey { get; set; } = 32001;
         public bool UseVisualUiForShopCommand { get; set; } = true;
         public int UIItemsPerPage { get; set; } = 6;
+
+        // Inventory logging
+        public bool VerboseInventoryLogging { get; set; } = false;
 
         // Discord Webhook settings
         public bool DiscordWebhookEnabled { get; set; } = false;

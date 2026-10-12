@@ -48,13 +48,13 @@ namespace KizShop.Tests
             // Page 3 (Backpack): 2x2 grid (4 slots -> can hold two 1x2 items)
             inv.items[PlayerInventory.BACKPACK].resize(2, 2);
 
-            Assert.True(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 1, 2, 1));
-            Assert.True(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 1, 2, 2));
-            Assert.True(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 1, 2, 3));
-            Assert.True(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 1, 2, 4));
+            Assert.True(UnturnedInventoryGateway.SimulatePlacement(inv, 1, 2, 1, out _));
+            Assert.True(UnturnedInventoryGateway.SimulatePlacement(inv, 1, 2, 2, out _));
+            Assert.True(UnturnedInventoryGateway.SimulatePlacement(inv, 1, 2, 3, out _));
+            Assert.True(UnturnedInventoryGateway.SimulatePlacement(inv, 1, 2, 4, out _));
 
             // 5 items cannot fit in 2x2 + 2x2
-            Assert.False(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 1, 2, 5));
+            Assert.False(UnturnedInventoryGateway.SimulatePlacement(inv, 1, 2, 5, out _));
         }
 
         [Fact]
@@ -66,9 +66,9 @@ namespace KizShop.Tests
             inv.items[PlayerInventory.SLOTS].resize(1, 3);
 
             // Item is 3 wide x 1 high (must rotate to 1x3 to fit)
-            Assert.True(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 3, 1, 1));
+            Assert.True(UnturnedInventoryGateway.SimulatePlacement(inv, 3, 1, 1, out _));
             // Two 3x1 items cannot fit in a 1x3 grid
-            Assert.False(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 3, 1, 2));
+            Assert.False(UnturnedInventoryGateway.SimulatePlacement(inv, 3, 1, 2, out _));
         }
 
         [Fact]
@@ -103,9 +103,9 @@ namespace KizShop.Tests
             hands.items.Add(jar);
 
             // Column 0 is taken. Column 1 (1,0 and 1,1) has space for one 1x2 item.
-            Assert.True(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 1, 2, 1));
+            Assert.True(UnturnedInventoryGateway.SimulatePlacement(inv, 1, 2, 1, out _));
             // A second 1x2 item cannot fit
-            Assert.False(UnturnedInventoryGateway.CheckMultiStackSpace(inv, 1, 2, 2));
+            Assert.False(UnturnedInventoryGateway.SimulatePlacement(inv, 1, 2, 2, out _));
         }
     }
 }
