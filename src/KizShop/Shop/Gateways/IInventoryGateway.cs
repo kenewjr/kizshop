@@ -48,5 +48,7 @@ namespace KizShop.Shop.Gateways
         Task<bool> TryAddItemAsync(ulong steamId, Item item, bool autoEquip = false);
         Task<bool> RemoveItemByReferenceAsync(ulong steamId, Item item);
         Task<bool> RemoveItemAtAsync(ulong steamId, byte page, byte index);
+        Task<InventoryItemInstance> GetEquippedItemAsync(ulong steamId);
+        Task<List<InventoryItemInstance>> GetAllGearItemsAsync(ulong steamId);
     }
 }

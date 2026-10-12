@@ -421,6 +421,8 @@ namespace KizShop.Shop.Gateways
                 if (player == null || player.Inventory == null) return false;
 
                 var inv = player.Inventory;
+                var equipment = player.Player?.equipment;
+
                 for (byte page = 0; page < inv.items.Length; page++)
                 {
                     var pageItems = inv.items[page];
@@ -431,6 +433,10 @@ namespace KizShop.Shop.Gateways
                         var jar = pageItems.getItem((byte)i);
                         if (jar != null && ReferenceEquals(jar.item, item))
                         {
+                            if (equipment != null && equipment.HasValidUseable && equipment.equippedPage == page && equipment.equipped_x == jar.x && equipment.equipped_y == jar.y)
+                            {
+                                equipment.dequip();
+                            }
                             inv.removeItem(page, (byte)i);
                             return true;
                         }
@@ -451,6 +457,79 @@ namespace KizShop.Shop.Gateways
 
                 player.Inventory.removeItem(page, index);
                 return true;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<InventoryItemInstance> GetEquippedItemAsync(ulong steamId)
+        {
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(GetEquippedItemAsync));
+                var player = GetPlayer(steamId);
+                if (player == null || player.Inventory == null || player.Player == null) return null;
+
+                var equipment = player.Player.equipment;
+                if (equipment == null || !equipment.HasValidUseable) return null;
+
+                byte page = equipment.equippedPage;
+                if (page >= player.Inventory.items.Length || player.Inventory.items[page] == null) return null;
+
+                var pageItems = player.Inventory.items[page];
+                byte count = pageItems.getItemCount();
+                for (byte i = 0; i < count; i++)
+                {
+                    var jar = pageItems.getItem(i);
+                    if (jar != null && jar.x == equipment.equipped_x && jar.y == equipment.equipped_y)
+                    {
+                        return new InventoryItemInstance
+                        {
+                            Page = page,
+                            Index = i,
+                            Item = jar.item
+                        };
+                    }
+                }
+                return null;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<InventoryItemInstance>> GetAllGearItemsAsync(ulong steamId)
+        {
+            return await _dispatcher.RunOnMainThreadAsync(() =>
+            {
+                DebugAssertMainThread(nameof(GetAllGearItemsAsync));
+                var list = new List<InventoryItemInstance>();
+                var player = GetPlayer(steamId);
+                if (player == null || player.Inventory == null || player.Player == null) return list;
+
+                var inv = player.Inventory;
+                var equipment = player.Player.equipment;
+
+                foreach (byte page in StoragePages)
+                {
+                    if (page >= inv.items.Length || inv.items[page] == null) continue;
+                    var pageItems = inv.items[page];
+                    byte count = pageItems.getItemCount();
+
+                    for (byte i = 0; i < count; i++)
+                    {
+                        var jar = pageItems.getItem(i);
+                        if (jar == null || jar.item == null) continue;
+
+                        if (equipment != null && equipment.HasValidUseable && equipment.equippedPage == page && equipment.equipped_x == jar.x && equipment.equipped_y == jar.y)
+                        {
+                            continue; // Exclude equipped item
+                        }
+
+                        list.Add(new InventoryItemInstance
+                        {
+                            Page = page,
+                            Index = i,
+                            Item = jar.item
+                        });
+                    }
+                }
+                return list;
             }).ConfigureAwait(false);
         }
     }

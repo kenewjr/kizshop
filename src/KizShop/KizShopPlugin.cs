@@ -17,6 +17,7 @@ using Steamworks;
 using KizShop.API;
 using KizShop.Common;
 using KizShop.Discord;
+using KizShop.Combat;
 using KizShop.Economy;
 using KizShop.Shop;
 using KizShop.Shop.Gateways;
@@ -34,10 +35,13 @@ namespace KizShop
         public ShopTransactionService Transactions { get; private set; }
         public DiscordWebhookService DiscordWebhook { get; private set; }
         public DiscordBotService DiscordBot { get; private set; }
+        public ICombatTagService CombatTag { get; private set; }
+        public IClock Clock { get; private set; } = SystemClock.Instance;
         public IMainThreadDispatcher Dispatcher { get; private set; } = new RocketMainThreadDispatcher();
 
         private CancellationTokenSource _playtimeCts;
         private CancellationTokenSource _logPruneCts;
+        private CancellationTokenSource _bountySweepCts;
 
         private readonly ConcurrentDictionary<(ulong killer, ulong victim), DateTime> _killCooldowns =
             new ConcurrentDictionary<(ulong killer, ulong victim), DateTime>();
@@ -135,7 +139,63 @@ namespace KizShop
             { "kizshop_item_price_set", "<color=green>Shop item ID {0} prices updated.</color>" },
             { "kizshop_veh_added", "<color=green>Shop vehicle {0} (ID: {1}) added/updated.</color>" },
             { "kizshop_veh_removed", "<color=green>Shop vehicle ID {0} removed.</color>" },
-            { "kizshop_veh_price_set", "<color=green>Shop vehicle ID {0} prices updated.</color>" }
+            { "kizshop_veh_price_set", "<color=green>Shop vehicle ID {0} prices updated.</color>" },
+            { "kizshop_setcategory_usage", "Usage: /kizshop setcategory <id> <category>" },
+            { "kizshop_category_set", "<color=green>Category for item ID {0} set to '{1}'.</color>" },
+            { "kizshop_resetpricing_usage", "Usage: /kizshop resetpricing <id|all>" },
+            { "kizshop_resetpricing_all_success", "<color=green>Dynamic pricing pressure reset for all items.</color>" },
+            { "kizshop_resetpricing_item_success", "<color=green>Dynamic pricing pressure reset for item {0}.</color>" },
+            { "kizshop_import_usage", "Usage: /kizshop import uconomy <mysql|csv> [overwrite] [apply]" },
+            { "no_permission", "<color=red>You do not have permission to execute this command.</color>" },
+
+            { "combat_tagged", "You cannot use the shop for {0}s after combat." },
+
+            { "shop_categories_header", "<color=cyan>--- KizShop Categories ---</color>" },
+            { "shop_category_entry", "<color=yellow>{0}</color>: <color=green>{1}</color> items" },
+            { "shop_categories_footer", "View category: /shop <category> [page] | View all: /shop <page>" },
+            { "shop_search_usage", "Usage: /shop search <text> [page]" },
+            { "shop_search_no_results", "<color=yellow>No items found matching '{0}'.</color>" },
+            { "shop_header_context", "<color=cyan>--- KizShop: {0} (Page {1}/{2}) ---</color>" },
+            { "category_not_found", "<color=red>Category '{0}' not found.</color>" },
+            { "ambiguous_category", "<color=yellow>Multiple matching categories: {0}. Please be more specific.</color>" },
+
+            { "boss_reward_received", "<color=gold>You received {0} for defeating {1}!</color>" },
+
+            { "sell_hand_empty", "<color=red>You are not holding any item in your hands.</color>" },
+            { "sell_hand_not_sellable", "<color=red>The item in your hands cannot be sold.</color>" },
+            { "sell_hand_amount_ignored", "<color=yellow>Note: Held items are sold one at a time. Amount parameter was ignored.</color>" },
+            { "sell_all_usage", "Usage: /sell all <category> [confirm]" },
+            { "sell_all_no_items", "<color=yellow>No sellable items found in category '{0}'.</color>" },
+            { "sell_all_summary_header", "<color=cyan>--- Sell All Summary: {0} ---</color>" },
+            { "sell_all_summary_details", "Items found: <color=yellow>{0}</color> ({1} distinct). Total expected payout: <color=green>{2}</color>." },
+            { "sell_all_summary_skipped", "<color=gray>Skipped: {0} modified guns, {1} other non-sellable items.</color>" },
+            { "sell_all_summary_prompt", "Type <color=green>/sell all {0} confirm</color> within 30 seconds to proceed." },
+            { "sell_all_no_pending", "<color=red>No pending sell all confirmation found. Run /sell all <category> first.</color>" },
+            { "sell_all_expired", "<color=red>Confirmation expired. Run /sell all <category> again.</color>" },
+            { "sell_all_inventory_changed", "<color=red>Your inventory changed since the summary. Run /sell all {0} again.</color>" },
+            { "sell_all_success", "<color=green>Sold {0} items for a total of {1}. New balance: {2}.</color>" },
+
+            { "bounty_disabled", "<color=red>Bounties are currently disabled.</color>" },
+            { "bounty_usage", "Usage: /bounty <set|list|me> [player] [amount]" },
+            { "bounty_set_usage", "Usage: /bounty set <player|steamid> <amount>" },
+            { "bounty_amount_invalid", "<color=red>Bounty amount must be at least {0}.</color>" },
+            { "bounty_target_not_found", "<color=red>Target player '{0}' not found.</color>" },
+            { "bounty_self", "<color=red>You cannot place a bounty on yourself.</color>" },
+            { "bounty_max_target", "<color=red>This would exceed the maximum active bounty on this target ({0}).</color>" },
+            { "bounty_insufficient_funds", "<color=red>You need {0} to place this bounty, but only have {1}.</color>" },
+            { "bounty_set_success", "<color=green>Bounty of {0} placed on {1}!</color>" },
+            { "bounty_broadcast", "<color=gold>[BOUNTY] {0} placed a bounty of {1} on {2}!</color>" },
+            { "bounty_list_header", "<color=cyan>--- Active Bounties (Page {0}/{1}) ---</color>" },
+            { "bounty_list_entry", "<color=yellow>{0}</color>: <color=green>{1}</color>" },
+            { "bounty_list_empty", "No active bounties." },
+            { "bounty_me", "Active bounty on you: <color=gold>{0}</color>" },
+            { "bounty_claimed_killer", "<color=gold>+ {0} bounty claimed for eliminating {1}!</color>" },
+            { "bounty_claimed_broadcast", "<color=gold>[BOUNTY CLAIMED] {0} collected the {1} bounty on {2}!</color>" },
+
+            { "daily_disabled", "<color=red>Daily rewards are currently disabled.</color>" },
+            { "daily_already_claimed", "<color=yellow>You already claimed your daily reward today! Next reset in {0}.</color>" },
+            { "daily_payout_failed", "<color=red>Failed to deposit daily reward. Please contact an admin.</color>" },
+            { "daily_success", "<color=green>Claimed daily reward: {0}! Current streak: {1}/{2} days.</color>" }
         };
 
         protected override void Load()
@@ -190,12 +250,17 @@ namespace KizShop
                 Shop = new ShopService(Directory, () => Configuration.Instance.AllowSellAboveBuy);
                 Shop.Load();
 
+                CombatTag = new CombatTagService(() => Configuration.Instance, Clock);
+
                 Transactions = new ShopTransactionService(
                     Shop,
                     Economy,
                     new UnturnedInventoryGateway(),
                     new UnturnedVehicleGateway(),
-                    () => Configuration.Instance);
+                    () => Configuration.Instance,
+                    Clock,
+                    CombatTag,
+                    Storage);
 
                 // 4. Initialize Discord Services & Webhooks
                 DiscordWebhook = new DiscordWebhookService(() => Configuration.Instance);
@@ -233,6 +298,8 @@ namespace KizShop
                 // 5. Hook Game Events
                 UnturnedPlayerEvents.OnPlayerDeath += HandlePlayerDeath;
                 UnturnedPlayerEvents.OnPlayerUpdateStat += HandlePlayerStat;
+                DamageTool.damagePlayerRequested += HandleDamagePlayerRequested;
+                Provider.onEnemyDisconnected += HandleEnemyDisconnected;
                 Level.onPostLevelLoaded += HandlePostLevelLoaded;
 
                 if (Level.isLoaded)
@@ -240,8 +307,9 @@ namespace KizShop
                     Dispatcher.QueueOnMainThread(ValidateCatalog);
                 }
 
-                // 6. Start Playtime Income Loop
+                // 6. Start Loops
                 StartPlaytimeLoop();
+                StartBountySweepLoop();
 
                 int mainThreadId = (Dispatcher as RocketMainThreadDispatcher)?.MainThreadId ?? Thread.CurrentThread.ManagedThreadId;
                 Logger.Log(GetBuildIdentification(mainThreadId));
@@ -259,9 +327,12 @@ namespace KizShop
 
             StopPlaytimeLoop();
             StopLogPruneLoop();
+            StopBountySweepLoop();
 
             UnturnedPlayerEvents.OnPlayerDeath -= HandlePlayerDeath;
             UnturnedPlayerEvents.OnPlayerUpdateStat -= HandlePlayerStat;
+            DamageTool.damagePlayerRequested -= HandleDamagePlayerRequested;
+            Provider.onEnemyDisconnected -= HandleEnemyDisconnected;
 
             if (DiscordBot != null)
             {
@@ -370,8 +441,12 @@ namespace KizShop
 
         private void HandlePlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, CSteamID murderer)
         {
-            if (!Configuration.Instance.PlayerKillRewardEnabled) return;
-            if (murderer == CSteamID.Nil || murderer == player.CSteamID) return; // No suicide
+            if (player != null)
+            {
+                CombatTag?.Clear(player.CSteamID.m_SteamID);
+            }
+
+            if (murderer == CSteamID.Nil || (player != null && murderer == player.CSteamID)) return; // No suicide
 
             var killer = UnturnedPlayer.FromCSteamID(murderer);
             if (killer == null || killer.Player == null) return;
@@ -381,7 +456,7 @@ namespace KizShop
                 killer.Player.quests.groupID != CSteamID.Nil &&
                 killer.Player.quests.groupID == player.Player.quests.groupID)
             {
-                return; // Same group: no reward
+                return; // Same group: no reward or bounty
             }
 
             // Per (killer, victim) cooldown check
@@ -395,23 +470,142 @@ namespace KizShop
                 }
             }
 
-            if (!Money.TryFromDecimal(Configuration.Instance.PlayerKillRewardAmount, Configuration.Instance.MaxTransactionAmount, out var reward, out _))
-            {
-                return;
-            }
-
             _killCooldowns[key] = now;
 
-            // Off main thread DB work
+            // 1. Process Kill Reward (if enabled)
+            if (Configuration.Instance.PlayerKillRewardEnabled &&
+                Money.TryFromDecimal(Configuration.Instance.PlayerKillRewardAmount, Configuration.Instance.MaxTransactionAmount, out var reward, out _))
+            {
+                Task.Run(async () =>
+                {
+                    await Economy.DepositAsync(killer.CSteamID.m_SteamID, reward, $"KillReward:{player.CharacterName}").ConfigureAwait(false);
+                    Dispatcher.QueueOnMainThread(() =>
+                    {
+                        var formatted = FormatMoney(reward);
+                        KizChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
+                    });
+                });
+            }
+
+            // 2. Process Bounty Claim
+            if (Storage != null && Configuration.Instance.BountyEnabled)
+            {
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        var claimed = await Storage.ClaimBountiesAsync(player.CSteamID.m_SteamID, killer.CSteamID.m_SteamID).ConfigureAwait(false);
+                        if (claimed > Money.Zero)
+                        {
+                            var dep = await Economy.DepositAsync(killer.CSteamID.m_SteamID, claimed, $"BountyClaim:{player.CharacterName}").ConfigureAwait(false);
+                            if (!dep.Success)
+                            {
+                                Logger.LogError($"[KizShop] Deposit failed for claimed bounty of {claimed} to {killer.CSteamID}. Re-creating bounty row.");
+                                await Storage.CreateBountyAsync(0, player.CSteamID.m_SteamID, claimed, claimed, DateTime.UtcNow).ConfigureAwait(false);
+                            }
+                            else
+                            {
+                                Dispatcher.QueueOnMainThread(() =>
+                                {
+                                    var formatted = FormatMoney(claimed);
+                                    KizChat.Say(killer, Translate("bounty_claimed_killer", formatted, player.CharacterName), UnityEngine.Color.green);
+                                    if (Configuration.Instance.BountyAnnounceInChat)
+                                    {
+                                        KizChat.Broadcast(Translate("bounty_claimed_broadcast", killer.CharacterName, formatted, player.CharacterName), UnityEngine.Color.yellow);
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError($"[KizShop] Error processing bounty claim: {ex}");
+                    }
+                });
+            }
+        }
+
+        private void HandleDamagePlayerRequested(ref DamagePlayerParameters parameters, ref bool shouldAllow)
+        {
+            if (!shouldAllow) return;
+            if (parameters.player == null || parameters.killer == CSteamID.Nil) return;
+
+            ulong victimSteamId = 0;
+            try
+            {
+                victimSteamId = parameters.player.channel.owner.playerID.steamID.m_SteamID;
+            }
+            catch { }
+
+            ulong attackerSteamId = parameters.killer.m_SteamID;
+            if (victimSteamId != 0 && attackerSteamId != 0 && victimSteamId != attackerSteamId)
+            {
+                CombatTag?.Tag(attackerSteamId, victimSteamId);
+            }
+        }
+
+        private void HandleEnemyDisconnected(SteamPlayer player)
+        {
+            if (player != null && player.playerID != null)
+            {
+                CombatTag?.Clear(player.playerID.steamID.m_SteamID);
+            }
+        }
+
+        private void StartBountySweepLoop()
+        {
+            _bountySweepCts = new CancellationTokenSource();
+            var token = _bountySweepCts.Token;
+
             Task.Run(async () =>
             {
-                await Economy.DepositAsync(killer.CSteamID.m_SteamID, reward, $"KillReward:{player.CharacterName}").ConfigureAwait(false);
-                Dispatcher.QueueOnMainThread(() =>
+                while (!token.IsCancellationRequested)
                 {
-                    var formatted = FormatMoney(reward);
-                    KizChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
-                });
-            });
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromHours(1), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested) break;
+
+                    try
+                    {
+                        if (Storage != null && Economy != null && Configuration.Instance.BountyEnabled)
+                        {
+                            int expiryDays = Configuration.Instance.BountyExpiryDays;
+                            if (expiryDays <= 0) expiryDays = 7;
+                            var cutoff = Clock.UtcNow.AddDays(-expiryDays);
+
+                            var expiredList = await Storage.RefundExpiredBountiesAsync(cutoff).ConfigureAwait(false);
+                            foreach (var b in expiredList)
+                            {
+                                if (b.PlacerSteamId != 0 && b.NetAmount > Money.Zero)
+                                {
+                                    await Economy.DepositAsync(b.PlacerSteamId, b.NetAmount, "BountyExpiredRefund").ConfigureAwait(false);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError($"[KizShop] Error in bounty expiry sweep: {ex}");
+                    }
+                }
+            }, token);
+        }
+
+        private void StopBountySweepLoop()
+        {
+            if (_bountySweepCts != null)
+            {
+                _bountySweepCts.Cancel();
+                _bountySweepCts.Dispose();
+                _bountySweepCts = null;
+            }
         }
 
         private void HandlePlayerStat(UnturnedPlayer player, EPlayerStat stat)

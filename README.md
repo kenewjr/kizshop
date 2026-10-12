@@ -54,20 +54,53 @@
 | `/balance [player]` | `/bal` | Show own balance or target player's balance | `kizshop.balance`, `kizshop.balance.others` |
 | `/pay <player\|steamid> <amount>` | | Transfer money to an online player or existing account | `kizshop.pay` |
 | `/baltop` | | Show the top wealthiest players | `kizshop.baltop` |
+| `/shop` | `/items` | List available categories with item counts and page hint | `kizshop.shop` |
+| `/shop categories` | | List all shop categories | `kizshop.shop` |
+| `/shop <page>` | | Browse all items paged | `kizshop.shop` |
+| `/shop <category> [page]` | | Browse items within a category (exact or unique prefix match) | `kizshop.shop` |
+| `/shop search <text> [page]` | | Search items by name substring or exact ID | `kizshop.shop` |
+| `/cost <item\|vehicle>` | `/price` | Check buy and sell prices (displays base price if dynamic pricing active) | `kizshop.cost` |
 | `/buy <item> [amount]` | | Purchase items from the shop | `kizshop.buy` |
 | `/sell <item> [amount\|all]` | | Sell items from inventory to shop | `kizshop.sell` |
-| `/cost <item\|vehicle>` | `/price` | Check buy and sell prices | `kizshop.cost` |
-| `/shop [page]` | `/items` | View paginated catalog of available items | `kizshop.shop` |
+| `/sell hand [amount]` | | Sell the item instance currently held in hands | `kizshop.sell` |
+| `/sell all <category> [confirm]` | | Sell all gear items in category (summary preview with 30s confirmation) | `kizshop.sell` |
 | `/buyvehicle <name\|id\|guid>` | `/buyv`, `/vehicle` | Buy and safely spawn a vehicle | `kizshop.vehicle` |
+| `/bounty set <player\|steamid> <amount>` | | Place a bounty on a target player into escrow | `kizshop.bounty` |
+| `/bounty list [page]` | | List top active bounties on the server | `kizshop.bounty` |
+| `/bounty me` | | Check active bounties placed on you | `kizshop.bounty` |
+| `/daily` | | Claim daily login reward with consecutive streak bonuses | `kizshop.daily` |
 | `/eco <give\|take\|set> <player> <amount>` | `/economy` | Admin: adjust player balances | `kizshop.eco`, `kizshop.admin` |
 | `/kizshop [version]` | `/ks` | Admin: print build version or admin menu | `kizshop.admin` |
 | `/kizshop reload` | | Admin: reload config & shop catalog | `kizshop.admin` |
-| `/kizshop additem <id> <name> <buy> [sell] [perm]` | | Admin: add or update an item entry | `kizshop.admin` |
+| `/kizshop additem <id> <name> <buy> [sell] [perm] [category]` | | Admin: add or update an item entry | `kizshop.admin` |
 | `/kizshop removeitem <id>` | | Admin: remove an item from shop | `kizshop.admin` |
 | `/kizshop setitemprice <id> <buy> [sell]` | | Admin: update prices for an item | `kizshop.admin` |
-| `/kizshop addveh <id> <name> <buy> [sell] [perm]` | | Admin: add or update a vehicle entry | `kizshop.admin` |
+| `/kizshop setcategory <id> <category>` | | Admin: change the category of an item | `kizshop.admin` |
+| `/kizshop resetpricing <id\|all>` | | Admin: reset dynamic pricing pressure for an item or all items | `kizshop.admin` |
+| `/kizshop import uconomy <mysql\|csv> [overwrite] [apply]` | | Admin/Console: import balances from Uconomy (dry run by default) | `kizshop.import`, `kizshop.admin` |
+| `/kizshop addveh <id> <name> <buy> [sell] [perm] [category]` | | Admin: add or update a vehicle entry | `kizshop.admin` |
 | `/kizshop removeveh <id>` | | Admin: remove a vehicle from shop | `kizshop.admin` |
 | `/kizshop setvehprice <id> <buy> [sell]` | | Admin: update prices for a vehicle | `kizshop.admin` |
+
+### Permissions Summary
+
+| Permission | Description |
+|---|---|
+| `kizshop.balance` | Check own balance (`/balance`) |
+| `kizshop.balance.others` | Check target player's balance (`/balance <player>`) |
+| `kizshop.pay` | Transfer money to other players (`/pay`) |
+| `kizshop.baltop` | View top wealthiest players (`/baltop`) |
+| `kizshop.shop` | Browse shop catalog, categories, and search (`/shop`) |
+| `kizshop.cost` | Check item and vehicle prices (`/cost`) |
+| `kizshop.buy` | Purchase items (`/buy`) |
+| `kizshop.sell` | Sell items (`/sell`, `/sell hand`, `/sell all <category>`) |
+| `kizshop.vehicle` | Purchase and spawn vehicles (`/buyvehicle`) |
+| `kizshop.bounty` | Place, view, and check bounties (`/bounty`) |
+| `kizshop.daily` | Claim daily rewards and maintain streaks (`/daily`) |
+| `kizshop.bypass.combattag` | Bypass combat tag shop restrictions while in combat |
+| `kizshop.import` | Execute Uconomy data migrations (`/kizshop import`) |
+| `kizshop.eco` | Admin balance manipulation (`/eco`) |
+| `kizshop.admin` | Admin shop catalog management and configuration (`/kizshop`) |
 
 ### Discord Bot Commands (Gateway v10)
 
@@ -97,6 +130,42 @@
   <MaxBalance>0.00</MaxBalance>
   <MaxTransactionAmount>10000000.00</MaxTransactionAmount>
   <BaltopCount>10</BaltopCount>
+  
+  <!-- Combat Tag Settings -->
+  <CombatTagEnabled>true</CombatTagEnabled>
+  <CombatTagSeconds>20</CombatTagSeconds>
+  <CombatTagBlocksBuy>true</CombatTagBlocksBuy>
+  <CombatTagBlocksSell>true</CombatTagBlocksSell>
+  <CombatTagBlocksVehicle>true</CombatTagBlocksVehicle>
+
+  <!-- Dynamic Pricing Settings -->
+  <DynamicPricingDefaultEnabled>false</DynamicPricingDefaultEnabled>
+
+  <!-- Uconomy Import Settings -->
+  <UconomyImportConnectionString></UconomyImportConnectionString>
+  <UconomyImportTable>uconomy</UconomyImportTable>
+  <UconomyImportSteamIdColumn>steamId</UconomyImportSteamIdColumn>
+  <UconomyImportBalanceColumn>balance</UconomyImportBalanceColumn>
+
+  <!-- Boss Reward Settings -->
+  <BossRewardTopDamagePercent>30</BossRewardTopDamagePercent>
+  <BossRewardLastHitPercent>10</BossRewardLastHitPercent>
+  <BossRewardParticipationPercent>60</BossRewardParticipationPercent>
+  <BossRewardMinDamageSharePercent>1.0</BossRewardMinDamageSharePercent>
+
+  <!-- Bounty System Settings -->
+  <BountyEnabled>true</BountyEnabled>
+  <BountyMinAmount>100.00</BountyMinAmount>
+  <BountyMaxPerTarget>100000.00</BountyMaxPerTarget>
+  <BountyFeePercent>10</BountyFeePercent>
+  <BountyExpiryDays>7</BountyExpiryDays>
+  <BountyAnnounceInChat>true</BountyAnnounceInChat>
+
+  <!-- Daily Reward System Settings -->
+  <DailyRewardAmount>100.00</DailyRewardAmount>
+  <DailyStreakBonusPercentPerDay>10</DailyStreakBonusPercentPerDay>
+  <DailyMaxStreakDays>7</DailyMaxStreakDays>
+  <DailyResetUtcOffsetHours>7</DailyResetUtcOffsetHours>
   
   <!-- Transaction Log Pruning (days to keep, 0 = keep forever) -->
   <LogRetentionDays>30</LogRetentionDays>

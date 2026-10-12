@@ -58,6 +58,43 @@ namespace KizShop
         public string DiscordBotPrefix { get; set; } = "!ks ";
         public string DiscordBotAdminUserIds { get; set; } = "";
 
+        // Combat Tag
+        public bool CombatTagEnabled { get; set; } = true;
+        public int CombatTagSeconds { get; set; } = 20;
+        public bool CombatTagBlocksBuy { get; set; } = true;
+        public bool CombatTagBlocksSell { get; set; } = true;
+        public bool CombatTagBlocksVehicle { get; set; } = true;
+
+        // Uconomy Import
+        public string UconomyImportConnectionString { get; set; } = "";
+        public string UconomyImportTable { get; set; } = "uconomy";
+        public string UconomyImportSteamIdColumn { get; set; } = "steamId";
+        public string UconomyImportBalanceColumn { get; set; } = "balance";
+
+        // Boss Reward
+        public int BossRewardTopDamagePercent { get; set; } = 30;
+        public int BossRewardLastHitPercent { get; set; } = 10;
+        public int BossRewardParticipationPercent { get; set; } = 60;
+        public int BossRewardMinDamageSharePercent { get; set; } = 1;
+
+        // Dynamic Pricing
+        public bool DynamicPricingDefaultEnabled { get; set; } = false;
+
+        // Bounty
+        public bool BountyEnabled { get; set; } = true;
+        public decimal BountyMinAmount { get; set; } = 100.00m;
+        public decimal BountyMaxPerTarget { get; set; } = 100000.00m;
+        public int BountyFeePercent { get; set; } = 10;
+        public int BountyExpiryDays { get; set; } = 7;
+        public bool BountyAnnounceInChat { get; set; } = true;
+
+        // Daily Reward
+        public bool DailyRewardEnabled { get; set; } = true;
+        public decimal DailyRewardAmount { get; set; } = 100.00m;
+        public int DailyStreakBonusPercentPerDay { get; set; } = 10;
+        public int DailyMaxStreakDays { get; set; } = 7;
+        public int DailyResetUtcOffsetHours { get; set; } = 7;
+
         public void LoadDefaults()
         {
             DatabaseType = "LiteDB";
@@ -103,6 +140,37 @@ namespace KizShop
             DiscordBotToken = "";
             DiscordBotPrefix = "!ks ";
             DiscordBotAdminUserIds = "";
+
+            CombatTagEnabled = true;
+            CombatTagSeconds = 20;
+            CombatTagBlocksBuy = true;
+            CombatTagBlocksSell = true;
+            CombatTagBlocksVehicle = true;
+
+            UconomyImportConnectionString = "";
+            UconomyImportTable = "uconomy";
+            UconomyImportSteamIdColumn = "steamId";
+            UconomyImportBalanceColumn = "balance";
+
+            BossRewardTopDamagePercent = 30;
+            BossRewardLastHitPercent = 10;
+            BossRewardParticipationPercent = 60;
+            BossRewardMinDamageSharePercent = 1;
+
+            DynamicPricingDefaultEnabled = false;
+
+            BountyEnabled = true;
+            BountyMinAmount = 100.00m;
+            BountyMaxPerTarget = 100000.00m;
+            BountyFeePercent = 10;
+            BountyExpiryDays = 7;
+            BountyAnnounceInChat = true;
+
+            DailyRewardEnabled = true;
+            DailyRewardAmount = 100.00m;
+            DailyStreakBonusPercentPerDay = 10;
+            DailyMaxStreakDays = 7;
+            DailyResetUtcOffsetHours = 7;
         }
     }
 }

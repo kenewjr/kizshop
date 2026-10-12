@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Rocket.API;
-using Rocket.Unturned.Chat;
 using KizShop.Common;
 using KizShop.Shop;
 
@@ -43,8 +42,36 @@ namespace KizShop.Commands
                 if (itemLookup.Status == LookupStatus.Found)
                 {
                     var itemEntry = itemLookup.Entry;
-                    string buyStr = itemEntry.CanBuy ? plugin.FormatMoney(Money.FromDecimal(itemEntry.BuyPrice)) : plugin.Translate("cost_not_available");
-                    string sellStr = itemEntry.CanSell && itemEntry.SellPrice.HasValue ? plugin.FormatMoney(Money.FromDecimal(itemEntry.SellPrice.Value)) : plugin.Translate("cost_not_available");
+                    string buyStr = plugin.Translate("cost_not_available");
+                    string sellStr = plugin.Translate("cost_not_available");
+
+                    if (itemEntry.CanBuy)
+                    {
+                        var (effBuy, _) = await plugin.Transactions.GetEffectiveBuyPriceAsync(itemEntry, 1).ConfigureAwait(false);
+                        var baseBuy = Money.FromDecimal(itemEntry.BuyPrice);
+                        if (effBuy.Cents != baseBuy.Cents)
+                        {
+                            buyStr = $"{plugin.FormatMoney(effBuy)} (base {itemEntry.BuyPrice:F2})";
+                        }
+                        else
+                        {
+                            buyStr = plugin.FormatMoney(effBuy);
+                        }
+                    }
+
+                    if (itemEntry.CanSell && itemEntry.SellPrice.HasValue)
+                    {
+                        var (effSell, _) = await plugin.Transactions.GetEffectiveSellPriceAsync(itemEntry, 1).ConfigureAwait(false);
+                        var baseSell = Money.FromDecimal(itemEntry.SellPrice.Value);
+                        if (effSell.Cents != baseSell.Cents)
+                        {
+                            sellStr = $"{plugin.FormatMoney(effSell)} (base {itemEntry.SellPrice.Value:F2})";
+                        }
+                        else
+                        {
+                            sellStr = plugin.FormatMoney(effSell);
+                        }
+                    }
 
                     plugin.Dispatcher.QueueOnMainThread(() =>
                         KizChat.Say(caller, plugin.Translate("cost_item_info", itemEntry.Name, itemEntry.Id, buyStr, sellStr), UnityEngine.Color.cyan));
@@ -73,8 +100,6 @@ namespace KizShop.Commands
 
                 plugin.Dispatcher.QueueOnMainThread(() =>
                     KizChat.Say(caller, plugin.Translate("cost_not_found", query), UnityEngine.Color.red));
-
-                await Task.CompletedTask;
             });
         }
     }

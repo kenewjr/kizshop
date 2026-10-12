@@ -2,12 +2,15 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using SDG.Unturned;
+using KizShop.Combat;
 using KizShop.Common;
 using KizShop.Economy;
 using KizShop.Shop.Gateways;
 using KizShop.Shop.Models;
+using KizShop.Storage;
 
 namespace KizShop.Shop
 {
@@ -22,6 +25,30 @@ namespace KizShop.Shop
         public Money Price { get; set; }
         public Money NewBalance { get; set; }
         public List<string> CandidateNames { get; set; }
+        public string Note { get; set; }
+    }
+
+    public class SellAllSummaryResult
+    {
+        public bool Success { get; set; }
+        public string ErrorKey { get; set; }
+        public object[] ErrorArgs { get; set; }
+        public string Category { get; set; }
+        public int TotalItemCount { get; set; }
+        public int DistinctItemCount { get; set; }
+        public Money ExpectedPayout { get; set; }
+        public int SkippedGunsCount { get; set; }
+        public int SkippedOtherCount { get; set; }
+        public List<string> CandidateNames { get; set; }
+    }
+
+    public class SellAllPendingConfirmation
+    {
+        public string Category { get; set; }
+        public DateTime CreatedUtc { get; set; }
+        public Money ExpectedPayout { get; set; }
+        public int ItemCount { get; set; }
+        public Dictionary<ushort, int> ItemQuantities { get; set; }
     }
 
     public class ShopTransactionService
@@ -32,9 +59,13 @@ namespace KizShop.Shop
         private readonly IVehicleGateway _vehicleGateway;
         private readonly IClock _clock;
         private readonly Func<KizShopConfiguration> _configProvider;
+        private readonly ICombatTagService _combatTagService;
+        private readonly IKizStorage _storage;
 
         private readonly ConcurrentDictionary<ulong, byte> _inFlightLocks = new ConcurrentDictionary<ulong, byte>();
         private readonly ConcurrentDictionary<ulong, DateTime> _vehicleCooldowns = new ConcurrentDictionary<ulong, DateTime>();
+        private readonly ConcurrentDictionary<ulong, SellAllPendingConfirmation> _pendingSellAll = new ConcurrentDictionary<ulong, SellAllPendingConfirmation>();
+        private readonly ConcurrentDictionary<ushort, SemaphoreSlim> _priceSemaphores = new ConcurrentDictionary<ushort, SemaphoreSlim>();
 
         public event Action<ulong, ItemShopEntry, int, Money, Money> OnItemPurchased;
         public event Action<ulong, ItemShopEntry, int, Money, Money> OnItemSold;
@@ -46,7 +77,9 @@ namespace KizShop.Shop
             IInventoryGateway inventoryGateway,
             IVehicleGateway vehicleGateway,
             Func<KizShopConfiguration> configProvider,
-            IClock clock = null)
+            IClock clock = null,
+            ICombatTagService combatTagService = null,
+            IKizStorage storage = null)
         {
             _shopService = shopService ?? throw new ArgumentNullException(nameof(shopService));
             _economyService = economyService ?? throw new ArgumentNullException(nameof(economyService));
@@ -54,6 +87,77 @@ namespace KizShop.Shop
             _vehicleGateway = vehicleGateway ?? throw new ArgumentNullException(nameof(vehicleGateway));
             _configProvider = configProvider ?? throw new ArgumentNullException(nameof(configProvider));
             _clock = clock ?? SystemClock.Instance;
+            _combatTagService = combatTagService;
+            _storage = storage;
+        }
+
+        private bool IsCombatBlocked(ulong steamId, bool blocksAction, Func<string, bool> hasPermission, bool isAdmin, out int secondsLeft)
+        {
+            secondsLeft = 0;
+            var cfg = _configProvider();
+            if (!cfg.CombatTagEnabled || !blocksAction || isAdmin || _combatTagService == null)
+            {
+                return false;
+            }
+
+            if (hasPermission != null && hasPermission("kizshop.bypass.combattag"))
+            {
+                return false;
+            }
+
+            return _combatTagService.IsTagged(steamId, out secondsLeft);
+        }
+
+        public async Task<(Money TotalPrice, Money FirstUnitPrice)> GetEffectiveBuyPriceAsync(ItemShopEntry entry, int quantity)
+        {
+            var cfg = _configProvider();
+            bool dynamicActive = (entry.DynamicPricing != null && entry.DynamicPricing.Enabled) || (entry.DynamicPricing == null && cfg.DynamicPricingDefaultEnabled);
+            if (_storage == null || !dynamicActive)
+            {
+                long unitCents = (long)Math.Round(entry.BuyPrice * 100m, MidpointRounding.AwayFromZero);
+                return (Money.FromCents(unitCents * quantity), Money.FromCents(unitCents));
+            }
+
+            var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = true };
+            var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
+            decimal recSell = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+            decimal recBuy = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+
+            return PriceCalculator.CalculateSequentialBuyPrice(entry.BuyPrice, entry.SellPrice ?? 0m, dynCfg, recBuy, recSell, quantity, cfg.AllowSellAboveBuy);
+        }
+
+        public async Task<(Money TotalPrice, Money FirstUnitPrice)> GetEffectiveSellPriceAsync(ItemShopEntry entry, int quantity)
+        {
+            var cfg = _configProvider();
+            decimal baseSell = entry.SellPrice ?? 0m;
+            bool dynamicActive = (entry.DynamicPricing != null && entry.DynamicPricing.Enabled) || (entry.DynamicPricing == null && cfg.DynamicPricingDefaultEnabled);
+            if (_storage == null || !dynamicActive)
+            {
+                long unitCents = (long)Math.Round(baseSell * 100m, MidpointRounding.AwayFromZero);
+                return (Money.FromCents(unitCents * quantity), Money.FromCents(unitCents));
+            }
+
+            var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = true };
+            var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
+            decimal recSell = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+            decimal recBuy = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+
+            return PriceCalculator.CalculateSequentialSellPrice(entry.BuyPrice, baseSell, dynCfg, recBuy, recSell, quantity, cfg.AllowSellAboveBuy);
+        }
+
+        private async Task UpdatePressureAfterTransactionAsync(ushort itemId, decimal sellDelta, decimal buyDelta)
+        {
+            if (_storage == null) return;
+            var sem = _priceSemaphores.GetOrAdd(itemId, _ => new SemaphoreSlim(1, 1));
+            await sem.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await _storage.UpdateItemPricePressureAsync(itemId, sellDelta, buyDelta, _clock.UtcNow).ConfigureAwait(false);
+            }
+            finally
+            {
+                sem.Release();
+            }
         }
 
         public async Task<ShopTransactionResult> ExecuteBuyAsync(
@@ -66,6 +170,12 @@ namespace KizShop.Shop
             if (quantity <= 0)
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "buy_invalid_amount" };
+            }
+
+            var cfg = _configProvider();
+            if (IsCombatBlocked(steamId, cfg.CombatTagBlocksBuy, hasPermission, isAdmin, out int secondsLeft))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { secondsLeft } };
             }
 
             var lookup = _shopService.ResolveItem(query, enabledOnly: true);
@@ -94,14 +204,12 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "buy_max_amount", ErrorArgs = new object[] { entry.MaxAmountPerPurchase.Value } };
             }
 
-            decimal totalDecimal = entry.BuyPrice * quantity;
-            var cfg = _configProvider();
-            if (!Money.TryFromDecimal(totalDecimal, cfg.MaxTransactionAmount, out var totalMoney, out var moneyErr))
+            var (totalMoney, _) = await GetEffectiveBuyPriceAsync(entry, quantity).ConfigureAwait(false);
+            if (totalMoney.Cents <= 0 || (cfg.MaxTransactionAmount > 0 && totalMoney.ToDecimal() > cfg.MaxTransactionAmount))
             {
-                return new ShopTransactionResult { Success = false, ErrorKey = "invalid_money_amount", ErrorArgs = new object[] { moneyErr } };
+                return new ShopTransactionResult { Success = false, ErrorKey = "invalid_money_amount", ErrorArgs = new object[] { "Amount exceeds limits" } };
             }
 
-            // In-flight per-player lock
             if (!_inFlightLocks.TryAdd(steamId, 1))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
@@ -109,7 +217,6 @@ namespace KizShop.Shop
 
             try
             {
-                // Check space simulation BEFORE withdrawing
                 var spaceRes = await _inventoryGateway.CheckSpaceAsync(steamId, entry.Id, quantity).ConfigureAwait(false);
                 if (!spaceRes.Fits)
                 {
@@ -134,7 +241,6 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = errKey, ErrorArgs = errArgs };
                 }
 
-                // Atomically withdraw at storage level
                 var withdrawRes = await _economyService.TryWithdrawAsync(steamId, totalMoney, $"ShopBuy:{entry.Id}x{quantity}").ConfigureAwait(false);
                 if (!withdrawRes.Success)
                 {
@@ -143,54 +249,47 @@ namespace KizShop.Shop
                     {
                         Success = false,
                         ErrorKey = "buy_insufficient_funds",
-                        ErrorArgs = new object[] { totalMoney, quantity, entry.Name, curBal }
+                        ErrorArgs = new object[] { totalMoney, entry.Name, curBal }
                     };
                 }
 
-                // Deliver ONE INSTANCE AT A TIME and track every delivered reference
-                var deliveredItems = new List<Item>();
-                bool allDelivered = true;
-                int failedIndex = -1;
-
-                try
+                bool deliverySucceeded = true;
+                bool autoEquip = cfg.AutoEquipPurchasedItems;
+                var deliveredItems = new System.Collections.Generic.List<SDG.Unturned.Item>();
+                for (int i = 0; i < quantity; i++)
                 {
-                    bool autoEquip = _configProvider().AutoEquipPurchasedItems;
-                    for (int i = 0; i < quantity; i++)
+                    var item = await _inventoryGateway.CreateItemAsync(entry.Id).ConfigureAwait(false);
+                    if (item == null)
                     {
-                        var item = await _inventoryGateway.CreateItemAsync(entry.Id).ConfigureAwait(false);
-                        if (await _inventoryGateway.TryAddItemAsync(steamId, item, autoEquip).ConfigureAwait(false))
-                        {
-                            deliveredItems.Add(item);
-                        }
-                        else
-                        {
-                            allDelivered = false;
-                            failedIndex = i;
-                            break;
-                        }
+                        deliverySucceeded = false;
+                        break;
                     }
-                }
-                catch (Exception ex)
-                {
-                    KizLog.Error($"[KizShop] Exception during item delivery to {steamId}: {ex}");
-                    allDelivered = false;
-                    if (failedIndex < 0) failedIndex = deliveredItems.Count;
+
+                    bool added = await _inventoryGateway.TryAddItemAsync(steamId, item, autoEquip).ConfigureAwait(false);
+                    if (!added)
+                    {
+                        deliverySucceeded = false;
+                        break;
+                    }
+
+                    deliveredItems.Add(item);
                 }
 
-                // Rollback on any failure
-                if (!allDelivered || deliveredItems.Count < quantity)
+                if (!deliverySucceeded)
                 {
-                    KizLog.Warning($"[KizShop] Buy delivery failed for {steamId} ({entry.Id}x{quantity}) at index {failedIndex}. Rolling back {deliveredItems.Count} items.");
                     foreach (var delivered in deliveredItems)
                     {
                         await _inventoryGateway.RemoveItemByReferenceAsync(steamId, delivered).ConfigureAwait(false);
                     }
-
-                    // Full refund ignoring max balance
                     await _economyService.DepositAsync(steamId, totalMoney, $"Refund:ShopBuyFail:{entry.Id}x{quantity}", ignoreMaxBalance: true).ConfigureAwait(false);
                     KizLog.Warning($"[KizShop] Buy delivery failed for {steamId} ({entry.Id}x{quantity}). Refunded {totalMoney}.");
-
                     return new ShopTransactionResult { Success = false, ErrorKey = "buy_failed_refunded" };
+                }
+
+                // Update pressure after successful delivery
+                if (entry.DynamicPricing != null && entry.DynamicPricing.Enabled && entry.DynamicPricing.BuyIncreasePerUnit > 0m)
+                {
+                    await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: 0, buyDelta: quantity).ConfigureAwait(false);
                 }
 
                 var newBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
@@ -207,7 +306,6 @@ namespace KizShop.Shop
             catch (Exception ex)
             {
                 KizLog.Error($"[KizShop] Unexpected exception in ExecuteBuyAsync for {steamId}: {ex}");
-                // In case of post-withdraw exception, ensure refund
                 await _economyService.DepositAsync(steamId, totalMoney, $"Refund:Exception:{entry.Id}", ignoreMaxBalance: true).ConfigureAwait(false);
                 return new ShopTransactionResult { Success = false, ErrorKey = "buy_failed_refunded" };
             }
@@ -224,6 +322,12 @@ namespace KizShop.Shop
             Func<string, bool> hasPermission,
             bool isAdmin)
         {
+            var cfg = _configProvider();
+            if (IsCombatBlocked(steamId, cfg.CombatTagBlocksSell, hasPermission, isAdmin, out int secondsLeft))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { secondsLeft } };
+            }
+
             var lookup = _shopService.ResolveItem(query, enabledOnly: true);
             if (lookup.Status == LookupStatus.NotFound)
             {
@@ -245,14 +349,12 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "sell_no_permission" };
             }
 
-            // Scan only player's own gear pages
             var available = await _inventoryGateway.GetGearItemsAsync(steamId, entry.Id).ConfigureAwait(false);
             if (available.Count == 0)
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "sell_not_enough_items", ErrorArgs = new object[] { 0, entry.Name, 1 } };
             }
 
-            // Check guns with attachments or loaded magazine
             foreach (var instance in available)
             {
                 if (await _inventoryGateway.HasAttachmentsOrLoadedMagazineAsync(entry.Id, instance.State).ConfigureAwait(false))
@@ -279,25 +381,44 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "sell_not_enough_items", ErrorArgs = new object[] { available.Count, entry.Name, amountToSell } };
             }
 
-            // Calculate unit price per instance based on amount ratio and quality
             var toSell = available.Take(amountToSell).ToList();
             byte defaultAmount = await _inventoryGateway.GetDefaultAmountAsync(entry.Id).ConfigureAwait(false);
-            var cfg = _configProvider();
+
+            // Fetch dynamic price state
+            decimal startingSellPressure = 0m;
+            decimal startingBuyPressure = 0m;
+            var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = cfg.DynamicPricingDefaultEnabled };
+            if (_storage != null && dynCfg.Enabled)
+            {
+                var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
+                startingSellPressure = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                startingBuyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+            }
 
             long totalPayoutCents = 0;
+            decimal curSellPressure = startingSellPressure;
             foreach (var inst in toSell)
             {
                 decimal amountRatio = (defaultAmount > 1) ? ((decimal)inst.Amount / defaultAmount) : 1.0m;
                 decimal qualityRatio = cfg.ScaleSellByQuality ? (inst.Quality / 100m) : 1.0m;
-                decimal unitPrice = entry.SellPrice.Value * amountRatio * qualityRatio;
 
-                long cents = (long)Math.Round(unitPrice * 100m, MidpointRounding.AwayFromZero);
+                var singleUnitMoney = PriceCalculator.CalculateSingleUnitSellPrice(
+                    entry.BuyPrice,
+                    entry.SellPrice.Value,
+                    dynCfg,
+                    startingBuyPressure,
+                    curSellPressure,
+                    cfg.AllowSellAboveBuy);
+
+                decimal instanceVal = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio;
+                long cents = (long)Math.Round(instanceVal * 100m, MidpointRounding.AwayFromZero);
                 totalPayoutCents += cents;
+
+                if (dynCfg.Enabled) curSellPressure += 1.0m;
             }
 
             var totalPayout = Money.FromCents(totalPayoutCents);
 
-            // In-flight lock
             if (!_inFlightLocks.TryAdd(steamId, 1))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
@@ -305,7 +426,6 @@ namespace KizShop.Shop
 
             try
             {
-                // Remove items FIRST
                 var removedInstances = new List<InventoryItemInstance>();
                 foreach (var inst in toSell)
                 {
@@ -317,7 +437,6 @@ namespace KizShop.Shop
 
                 if (removedInstances.Count < amountToSell)
                 {
-                    // Restore any items that were removed
                     foreach (var removed in removedInstances)
                     {
                         await _inventoryGateway.TryAddItemAsync(steamId, removed.Item).ConfigureAwait(false);
@@ -325,17 +444,20 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
                 }
 
-                // Deposit payout
                 var depositRes = await _economyService.DepositAsync(steamId, totalPayout, $"ShopSell:{entry.Id}x{amountToSell}").ConfigureAwait(false);
                 if (!depositRes.Success)
                 {
-                    // Rollback: give items back if payout failed
                     foreach (var removed in removedInstances)
                     {
                         await _inventoryGateway.TryAddItemAsync(steamId, removed.Item).ConfigureAwait(false);
                     }
                     KizLog.Error($"[KizShop] Payout failed for {steamId} selling {entry.Id}x{amountToSell}. Items restored.");
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
+                }
+
+                if (dynCfg.Enabled)
+                {
+                    await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: amountToSell, buyDelta: 0).ConfigureAwait(false);
                 }
 
                 OnItemSold?.Invoke(steamId, entry, amountToSell, totalPayout, depositRes.NewBalance);
@@ -354,12 +476,379 @@ namespace KizShop.Shop
             }
         }
 
+        public async Task<ShopTransactionResult> ExecuteSellHandAsync(
+            ulong steamId,
+            Func<string, bool> hasPermission,
+            bool isAdmin,
+            bool hadAmountArgument = false)
+        {
+            var cfg = _configProvider();
+            if (IsCombatBlocked(steamId, cfg.CombatTagBlocksSell, hasPermission, isAdmin, out int secondsLeft))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { secondsLeft } };
+            }
+
+            var equipped = await _inventoryGateway.GetEquippedItemAsync(steamId).ConfigureAwait(false);
+            if (equipped == null || equipped.Item == null)
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_hand_empty" };
+            }
+
+            var entry = _shopService.GetItems().FirstOrDefault(i => i.Id == equipped.ItemId);
+            if (entry == null || !entry.CanSell || !entry.SellPrice.HasValue || entry.SellPrice.Value <= 0)
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_hand_not_sellable" };
+            }
+
+            if (!string.IsNullOrEmpty(entry.Permission) && !isAdmin && !hasPermission(entry.Permission))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_no_permission" };
+            }
+
+            if (await _inventoryGateway.HasAttachmentsOrLoadedMagazineAsync(entry.Id, equipped.State).ConfigureAwait(false))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_gun_has_attachments" };
+            }
+
+            var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = cfg.DynamicPricingDefaultEnabled };
+            decimal sellPressure = 0m;
+            decimal buyPressure = 0m;
+            if (_storage != null && dynCfg.Enabled)
+            {
+                var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
+                sellPressure = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                buyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+            }
+
+            byte defaultAmount = await _inventoryGateway.GetDefaultAmountAsync(entry.Id).ConfigureAwait(false);
+            decimal amountRatio = (defaultAmount > 1) ? ((decimal)equipped.Amount / defaultAmount) : 1.0m;
+            decimal qualityRatio = cfg.ScaleSellByQuality ? (equipped.Quality / 100m) : 1.0m;
+
+            var singleUnitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, sellPressure, cfg.AllowSellAboveBuy);
+            decimal finalDec = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio;
+            var payout = Money.FromCents((long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero));
+
+            if (!_inFlightLocks.TryAdd(steamId, 1))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
+            }
+
+            try
+            {
+                bool removed = await _inventoryGateway.RemoveItemByReferenceAsync(steamId, equipped.Item).ConfigureAwait(false);
+                if (!removed)
+                {
+                    return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
+                }
+
+                var dep = await _economyService.DepositAsync(steamId, payout, $"SellHand:{entry.Id}").ConfigureAwait(false);
+                if (!dep.Success)
+                {
+                    await _inventoryGateway.TryAddItemAsync(steamId, equipped.Item).ConfigureAwait(false);
+                    return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
+                }
+
+                if (dynCfg.Enabled)
+                {
+                    await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: 1, buyDelta: 0).ConfigureAwait(false);
+                }
+
+                OnItemSold?.Invoke(steamId, entry, 1, payout, dep.NewBalance);
+                return new ShopTransactionResult
+                {
+                    Success = true,
+                    ItemEntry = entry,
+                    Quantity = 1,
+                    Price = payout,
+                    NewBalance = dep.NewBalance,
+                    Note = hadAmountArgument ? "sell_hand_amount_ignored" : null
+                };
+            }
+            finally
+            {
+                _inFlightLocks.TryRemove(steamId, out _);
+            }
+        }
+
+        public async Task<SellAllSummaryResult> ExecuteSellAllCategorySummaryAsync(
+            ulong steamId,
+            string categoryQuery,
+            Func<string, bool> hasPermission,
+            bool isAdmin)
+        {
+            var cfg = _configProvider();
+            if (IsCombatBlocked(steamId, cfg.CombatTagBlocksSell, hasPermission, isAdmin, out int secondsLeft))
+            {
+                return new SellAllSummaryResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { secondsLeft } };
+            }
+
+            if (!_shopService.ResolveCategory(categoryQuery, out string matchedCategory, out var candidates))
+            {
+                if (candidates != null && candidates.Count > 1)
+                {
+                    return new SellAllSummaryResult { Success = false, ErrorKey = "ambiguous_category", CandidateNames = candidates };
+                }
+                return new SellAllSummaryResult { Success = false, ErrorKey = "category_not_found", ErrorArgs = new object[] { categoryQuery } };
+            }
+
+            var allGear = await _inventoryGateway.GetAllGearItemsAsync(steamId).ConfigureAwait(false);
+            var catalogItems = _shopService.GetItems(enabledOnly: true)
+                .Where(i => i.CanSell && i.Category.Equals(matchedCategory, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(i => i.Id);
+
+            int skippedGuns = 0;
+            int skippedOther = 0;
+            var eligibleItems = new List<InventoryItemInstance>();
+
+            foreach (var inst in allGear)
+            {
+                if (!catalogItems.TryGetValue(inst.ItemId, out var entry))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(entry.Permission) && !isAdmin && !hasPermission(entry.Permission))
+                {
+                    skippedOther++;
+                    continue;
+                }
+
+                if (await _inventoryGateway.HasAttachmentsOrLoadedMagazineAsync(inst.ItemId, inst.State).ConfigureAwait(false))
+                {
+                    skippedGuns++;
+                    continue;
+                }
+
+                eligibleItems.Add(inst);
+            }
+
+            if (eligibleItems.Count == 0)
+            {
+                return new SellAllSummaryResult
+                {
+                    Success = false,
+                    ErrorKey = "sell_all_no_items",
+                    Category = matchedCategory,
+                    SkippedGunsCount = skippedGuns,
+                    SkippedOtherCount = skippedOther
+                };
+            }
+
+            // Calculate sequential dynamic pricing across grouped items
+            long totalExpectedCents = 0;
+            var itemQuantities = new Dictionary<ushort, int>();
+            var grouped = eligibleItems.GroupBy(x => x.ItemId);
+
+            foreach (var grp in grouped)
+            {
+                ushort itemId = grp.Key;
+                var entry = catalogItems[itemId];
+                int count = grp.Count();
+                itemQuantities[itemId] = count;
+
+                byte defAmount = await _inventoryGateway.GetDefaultAmountAsync(itemId).ConfigureAwait(false);
+                var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = cfg.DynamicPricingDefaultEnabled };
+
+                decimal sellPressure = 0m;
+                decimal buyPressure = 0m;
+                if (_storage != null && dynCfg.Enabled)
+                {
+                    var state = await _storage.GetItemPriceStateAsync(itemId).ConfigureAwait(false);
+                    sellPressure = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                    buyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                }
+
+                decimal curSell = sellPressure;
+                foreach (var inst in grp)
+                {
+                    decimal amountRatio = (defAmount > 1) ? ((decimal)inst.Amount / defAmount) : 1.0m;
+                    decimal qualityRatio = cfg.ScaleSellByQuality ? (inst.Quality / 100m) : 1.0m;
+
+                    var unitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
+                    decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio;
+                    totalExpectedCents += (long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero);
+
+                    if (dynCfg.Enabled) curSell += 1.0m;
+                }
+            }
+
+            var totalMoney = Money.FromCents(totalExpectedCents);
+            _pendingSellAll[steamId] = new SellAllPendingConfirmation
+            {
+                Category = matchedCategory,
+                CreatedUtc = _clock.UtcNow,
+                ExpectedPayout = totalMoney,
+                ItemCount = eligibleItems.Count,
+                ItemQuantities = itemQuantities
+            };
+
+            return new SellAllSummaryResult
+            {
+                Success = true,
+                Category = matchedCategory,
+                TotalItemCount = eligibleItems.Count,
+                DistinctItemCount = itemQuantities.Count,
+                ExpectedPayout = totalMoney,
+                SkippedGunsCount = skippedGuns,
+                SkippedOtherCount = skippedOther
+            };
+        }
+
+        public async Task<ShopTransactionResult> ExecuteSellAllCategoryConfirmAsync(
+            ulong steamId,
+            Func<string, bool> hasPermission,
+            bool isAdmin)
+        {
+            var cfg = _configProvider();
+            if (IsCombatBlocked(steamId, cfg.CombatTagBlocksSell, hasPermission, isAdmin, out int secondsLeft))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { secondsLeft } };
+            }
+
+            if (!_pendingSellAll.TryGetValue(steamId, out var conf))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_all_no_pending" };
+            }
+
+            if ((_clock.UtcNow - conf.CreatedUtc).TotalSeconds > 30.0)
+            {
+                _pendingSellAll.TryRemove(steamId, out _);
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_all_expired" };
+            }
+
+            // Recompute inventory items and payout
+            var allGear = await _inventoryGateway.GetAllGearItemsAsync(steamId).ConfigureAwait(false);
+            var catalogItems = _shopService.GetItems(enabledOnly: true)
+                .Where(i => i.CanSell && i.Category.Equals(conf.Category, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(i => i.Id);
+
+            var eligibleItems = new List<InventoryItemInstance>();
+            foreach (var inst in allGear)
+            {
+                if (!catalogItems.TryGetValue(inst.ItemId, out var entry)) continue;
+                if (!string.IsNullOrEmpty(entry.Permission) && !isAdmin && !hasPermission(entry.Permission)) continue;
+                if (await _inventoryGateway.HasAttachmentsOrLoadedMagazineAsync(inst.ItemId, inst.State).ConfigureAwait(false)) continue;
+                eligibleItems.Add(inst);
+            }
+
+            long recomputedCents = 0;
+            var itemCounts = new Dictionary<ushort, int>();
+            foreach (var grp in eligibleItems.GroupBy(x => x.ItemId))
+            {
+                ushort itemId = grp.Key;
+                var entry = catalogItems[itemId];
+                itemCounts[itemId] = grp.Count();
+                byte defAmount = await _inventoryGateway.GetDefaultAmountAsync(itemId).ConfigureAwait(false);
+                var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = cfg.DynamicPricingDefaultEnabled };
+
+                decimal sellPressure = 0m;
+                decimal buyPressure = 0m;
+                if (_storage != null && dynCfg.Enabled)
+                {
+                    var state = await _storage.GetItemPriceStateAsync(itemId).ConfigureAwait(false);
+                    sellPressure = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                    buyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                }
+
+                decimal curSell = sellPressure;
+                foreach (var inst in grp)
+                {
+                    decimal amountRatio = (defAmount > 1) ? ((decimal)inst.Amount / defAmount) : 1.0m;
+                    decimal qualityRatio = cfg.ScaleSellByQuality ? (inst.Quality / 100m) : 1.0m;
+                    var unitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
+                    decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio;
+                    recomputedCents += (long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero);
+                    if (dynCfg.Enabled) curSell += 1.0m;
+                }
+            }
+
+            var recomputedPayout = Money.FromCents(recomputedCents);
+            if (recomputedPayout.Cents != conf.ExpectedPayout.Cents)
+            {
+                _pendingSellAll.TryRemove(steamId, out _);
+                return new ShopTransactionResult
+                {
+                    Success = false,
+                    ErrorKey = "sell_all_inventory_changed",
+                    ErrorArgs = new object[] { conf.Category }
+                };
+            }
+
+            if (!_inFlightLocks.TryAdd(steamId, 1))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
+            }
+
+            try
+            {
+                var removedList = new List<InventoryItemInstance>();
+                foreach (var inst in eligibleItems)
+                {
+                    if (await _inventoryGateway.RemoveItemByReferenceAsync(steamId, inst.Item).ConfigureAwait(false))
+                    {
+                        removedList.Add(inst);
+                    }
+                }
+
+                if (removedList.Count < eligibleItems.Count)
+                {
+                    foreach (var removed in removedList)
+                    {
+                        await _inventoryGateway.TryAddItemAsync(steamId, removed.Item).ConfigureAwait(false);
+                    }
+                    return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
+                }
+
+                var dep = await _economyService.DepositAsync(steamId, conf.ExpectedPayout, $"SellAll:{conf.Category}x{eligibleItems.Count}").ConfigureAwait(false);
+                if (!dep.Success)
+                {
+                    foreach (var removed in removedList)
+                    {
+                        await _inventoryGateway.TryAddItemAsync(steamId, removed.Item).ConfigureAwait(false);
+                    }
+                    return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
+                }
+
+                // Update pressures sequentially
+                foreach (var kvp in itemCounts)
+                {
+                    if (catalogItems.TryGetValue(kvp.Key, out var entry))
+                    {
+                        var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = cfg.DynamicPricingDefaultEnabled };
+                        if (dynCfg.Enabled)
+                        {
+                            await UpdatePressureAfterTransactionAsync(kvp.Key, sellDelta: kvp.Value, buyDelta: 0).ConfigureAwait(false);
+                        }
+                    }
+                }
+
+                _pendingSellAll.TryRemove(steamId, out _);
+                return new ShopTransactionResult
+                {
+                    Success = true,
+                    Quantity = eligibleItems.Count,
+                    Price = conf.ExpectedPayout,
+                    NewBalance = dep.NewBalance
+                };
+            }
+            finally
+            {
+                _inFlightLocks.TryRemove(steamId, out _);
+            }
+        }
+
         public async Task<ShopTransactionResult> ExecuteBuyVehicleAsync(
             ulong steamId,
             string query,
             Func<string, bool> hasPermission,
             bool isAdmin)
         {
+            var cfg = _configProvider();
+            if (IsCombatBlocked(steamId, cfg.CombatTagBlocksVehicle, hasPermission, isAdmin, out int secondsLeft))
+            {
+                return new ShopTransactionResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { secondsLeft } };
+            }
+
             var lookup = _shopService.ResolveVehicle(query, enabledOnly: true);
             if (lookup.Status == LookupStatus.NotFound)
             {
@@ -381,9 +870,6 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "vehicle_no_permission" };
             }
 
-            var cfg = _configProvider();
-
-            // Cooldown check
             if (_vehicleCooldowns.TryGetValue(steamId, out var lastSpawn))
             {
                 var elapsed = (_clock.UtcNow - lastSpawn).TotalSeconds;
@@ -394,7 +880,6 @@ namespace KizShop.Shop
                 }
             }
 
-            // Max vehicles check
             var vehicleCount = await _vehicleGateway.GetPlayerVehicleCountAsync(steamId).ConfigureAwait(false);
             if (vehicleCount >= cfg.MaxVehiclesPerPlayer)
             {
@@ -413,7 +898,6 @@ namespace KizShop.Shop
 
             try
             {
-                // Withdraw first
                 var withdrawRes = await _economyService.TryWithdrawAsync(steamId, costMoney, $"ShopBuyVehicle:{entry.Id}").ConfigureAwait(false);
                 if (!withdrawRes.Success)
                 {
@@ -426,17 +910,14 @@ namespace KizShop.Shop
                     };
                 }
 
-                // Spawn vehicle
                 var spawnRes = await _vehicleGateway.TrySpawnVehicleAsync(steamId, entry.Id, cfg.VehicleSpawnDistance).ConfigureAwait(false);
                 if (!spawnRes.Success)
                 {
-                    // Destroy handle if partially created
                     if (spawnRes.VehicleHandle != null)
                     {
                         await _vehicleGateway.DestroyVehicleAsync(spawnRes.VehicleHandle).ConfigureAwait(false);
                     }
 
-                    // Full refund
                     await _economyService.DepositAsync(steamId, costMoney, $"Refund:VehicleSpawnFail:{entry.Id}", ignoreMaxBalance: true).ConfigureAwait(false);
                     return new ShopTransactionResult
                     {

@@ -1,7 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Rocket.API;
-using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
 using KizShop.Common;
 
@@ -11,8 +11,8 @@ namespace KizShop.Commands
     {
         public AllowedCaller AllowedCaller => AllowedCaller.Player;
         public string Name => "sell";
-        public string Help => "Sell items to the shop.";
-        public string Syntax => "<item name|id|guid> [amount|all]";
+        public string Help => "Sell items, held item, or a whole category to the shop.";
+        public string Syntax => "<item|hand|all> [amount|category] [confirm]";
         public List<string> Aliases => new List<string>();
         public List<string> Permissions => new List<string> { "kizshop.sell" };
 
@@ -22,6 +22,7 @@ namespace KizShop.Commands
             {
                 var plugin = KizShopPlugin.Instance;
                 var player = (UnturnedPlayer)caller;
+                ulong steamId = player.CSteamID.m_SteamID;
 
                 if (command.Length < 1)
                 {
@@ -30,11 +31,114 @@ namespace KizShop.Commands
                     return;
                 }
 
+                string firstArg = command[0].ToLowerInvariant();
+
+                // 1. /sell hand [amount]
+                if (firstArg == "hand")
+                {
+                    bool hadAmount = command.Length >= 2;
+                    var res = await plugin.Transactions.ExecuteSellHandAsync(
+                        steamId,
+                        node => caller.HasPermission(node),
+                        caller.IsAdmin,
+                        hadAmount).ConfigureAwait(false);
+
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                    {
+                        if (res.Success)
+                        {
+                            var payoutStr = plugin.FormatMoney(res.Price);
+                            var balStr = plugin.FormatMoney(res.NewBalance);
+                            KizChat.Say(caller, plugin.Translate("sell_success", res.Quantity, res.ItemEntry.Name, payoutStr, balStr), UnityEngine.Color.green);
+                            if (res.Note == "sell_hand_amount_ignored")
+                            {
+                                KizChat.Say(caller, plugin.Translate("sell_hand_amount_ignored"), UnityEngine.Color.yellow);
+                            }
+                        }
+                        else
+                        {
+                            KizChat.Say(caller, plugin.Translate(res.ErrorKey, res.ErrorArgs ?? Array.Empty<object>()), UnityEngine.Color.red);
+                        }
+                    });
+                    return;
+                }
+
+                // 2. /sell all <category> [confirm]
+                if (firstArg == "all")
+                {
+                    if (command.Length < 2)
+                    {
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            KizChat.Say(caller, plugin.Translate("sell_all_usage"), UnityEngine.Color.yellow));
+                        return;
+                    }
+
+                    bool isConfirm = (command.Length >= 3 && command[2].Equals("confirm", StringComparison.OrdinalIgnoreCase)) ||
+                                     command[1].Equals("confirm", StringComparison.OrdinalIgnoreCase);
+
+                    if (isConfirm)
+                    {
+                        var confirmRes = await plugin.Transactions.ExecuteSellAllCategoryConfirmAsync(
+                            steamId,
+                            node => caller.HasPermission(node),
+                            caller.IsAdmin).ConfigureAwait(false);
+
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                        {
+                            if (confirmRes.Success)
+                            {
+                                var payoutStr = plugin.FormatMoney(confirmRes.Price);
+                                var balStr = plugin.FormatMoney(confirmRes.NewBalance);
+                                KizChat.Say(caller, plugin.Translate("sell_all_success", confirmRes.Quantity, payoutStr, balStr), UnityEngine.Color.green);
+                            }
+                            else
+                            {
+                                KizChat.Say(caller, plugin.Translate(confirmRes.ErrorKey, confirmRes.ErrorArgs ?? Array.Empty<object>()), UnityEngine.Color.red);
+                            }
+                        });
+                        return;
+                    }
+
+                    // Summary flow
+                    string categoryArg = command[1];
+                    var summaryRes = await plugin.Transactions.ExecuteSellAllCategorySummaryAsync(
+                        steamId,
+                        categoryArg,
+                        node => caller.HasPermission(node),
+                        caller.IsAdmin).ConfigureAwait(false);
+
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                    {
+                        if (summaryRes.Success)
+                        {
+                            var payoutStr = plugin.FormatMoney(summaryRes.ExpectedPayout);
+                            KizChat.Say(caller, plugin.Translate("sell_all_summary_header", summaryRes.Category), UnityEngine.Color.cyan);
+                            KizChat.Say(caller, plugin.Translate("sell_all_summary_details", summaryRes.TotalItemCount, summaryRes.DistinctItemCount, payoutStr), UnityEngine.Color.white);
+                            if (summaryRes.SkippedGunsCount > 0 || summaryRes.SkippedOtherCount > 0)
+                            {
+                                KizChat.Say(caller, plugin.Translate("sell_all_summary_skipped", summaryRes.SkippedGunsCount, summaryRes.SkippedOtherCount), UnityEngine.Color.gray);
+                            }
+                            KizChat.Say(caller, plugin.Translate("sell_all_summary_prompt", summaryRes.Category), UnityEngine.Color.yellow);
+                        }
+                        else if (summaryRes.CandidateNames != null && summaryRes.CandidateNames.Count > 0)
+                        {
+                            string candidates = string.Join(", ", summaryRes.CandidateNames);
+                            KizChat.Say(caller, plugin.Translate("ambiguous_category", candidates), UnityEngine.Color.yellow);
+                        }
+                        else
+                        {
+                            KizChat.Say(caller, plugin.Translate(summaryRes.ErrorKey, summaryRes.ErrorArgs ?? Array.Empty<object>()), UnityEngine.Color.red);
+                        }
+                    });
+                    return;
+                }
+
+                // 3. Regular item sell: /sell <item> [amount|all]
                 string query = command[0];
                 string amountArg = command.Length >= 2 ? command[1] : "1";
 
                 var result = await plugin.Transactions.ExecuteSellAsync(
-                    player.CSteamID.m_SteamID,
+                    steamId,
                     query,
                     amountArg,
                     node => caller.HasPermission(node),
@@ -55,7 +159,7 @@ namespace KizShop.Commands
                     }
                     else
                     {
-                        KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
+                        KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? Array.Empty<object>()), UnityEngine.Color.red);
                     }
                 });
             });

@@ -149,8 +149,63 @@ public interface IKizStorage : IDisposable
     Task SetBalanceAsync(ulong steamId, Money amount, string reason);
     Task LogTransactionAsync(ulong steamId, string type, Money amount, string details);
     Task PruneLogsAsync(int retentionDays);
+
+    // Boss Rewards
+    Task<bool> HasRewardEventAsync(string eventKey);
+    Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc);
+
+    // Dynamic Pricing
+    Task<ItemPriceState> GetItemPriceStateAsync(ushort itemId);
+    Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc);
+    Task ResetItemPriceStateAsync(ushort? itemId);
+
+    // Bounties
+    Task<int> CreateBountyAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc);
+    Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50);
+    Task<Money> GetTotalBountyOnTargetAsync(ulong targetSteamId);
+    Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId);
+    Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc);
+
+    // Daily Claims
+    Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc);
+    Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak);
 }
 ```
+
+## Combat Tag System
+
+- **Hook**: Listens to `DamageTool.damagePlayerRequested` (respecting `shouldAllow == false` and ignoring self-damage, zombies, animals).
+- **Tagging**: When player A damages player B, both are tagged for `CombatTagSeconds` (default 20s).
+- **Storage**: In-memory `ConcurrentDictionary<ulong, DateTime>` synchronized via `IClock`.
+- **Enforcement**: Prior to acquiring transaction locks in `/buy`, `/sell`, and `/buyvehicle`, tagged players are rejected with remaining seconds unless granted `kizshop.bypass.combattag` or admin status.
+- **Cleanup**: Tags clear automatically on player death (`DamageTool.damagePlayerRequested` / `onPlayerDied`) and disconnect (`Provider.onEnemyDisconnected`).
+
+## Dynamic Pricing Formula
+
+- **Pressure Calculation**: Selling items increases `SellPressure`; buying items increases `BuyPressure`. Pressure decays linearly back toward 0 based on elapsed time:
+  $$\text{recoveredPressure} = \max(0, \text{pressure} - \Delta\text{hours} \times \text{RecoveryPerHour})$$
+- **Multipliers**:
+  $$\text{EffectiveSellMultiplier} = \text{clamp}(1 - \text{SellDecayPerUnit} \times \text{sellPressure}, \text{MinSellMultiplier}, 1.0)$$
+  $$\text{EffectiveBuyMultiplier} = \text{clamp}(1 + \text{BuyIncreasePerUnit} \times \text{buyPressure}, 1.0, \text{MaxBuyMultiplier})$$
+- **Sequential Multi-Unit Pricing**: For transactions of $N$ units, each unit price is computed sequentially incrementing pressure by 1 per unit, preventing bulk transactions from capturing top pricing for the entire batch.
+- **Safety**: Effective sell price is strictly clamped so it never exceeds effective buy price unless `AllowSellAboveBuy` is enabled. Pressure updates are committed only after transaction delivery and payout succeed; failed or rolled-back transactions never adjust pressure.
+
+## Bounty Escrow Flow
+
+1. **Placement**: Placer initiates `/bounty set <target> <amount>`. Full amount is withdrawn from the placer immediately into escrow.
+2. **Fee Deduction**: A configurable `BountyFeePercent` (default 10%) is deducted as an economy sink; net bounty ($90\%$) is stored in the database. Self-bounties and non-existent targets are rejected.
+3. **Claiming**: On PvP kill, `ClaimBountiesAsync(target, killer)` atomically deletes eligible active bounties and sums the payout in a single database transaction. The killer cannot claim bounties they placed themselves (those remain active). If killer balance deposit fails, the claim rolls back.
+4. **Expiry & Refunds**: An hourly background sweep identifies bounties older than `BountyExpiryDays` (default 7 days), deletes them atomically, and refunds escrowed amounts to placers.
+
+## Boss Reward Distribution Rules
+
+- **Pure Exact-Sum Function**: Implemented in `BossRewardCalculator`. Payouts across participants sum to **exactly** the total pool cents without any loss or inflation.
+- **Pool Allocation**:
+  - Top Damager: `BossRewardTopDamagePercent` (default 30%).
+  - Last Hitter: `BossRewardLastHitPercent` (default 10%). If last hitter is not a participant, this share shifts into the participation pool.
+  - Participation: Remaining percentage allocated to players whose damage share meets `BossRewardMinDamageSharePercent`.
+- **Deterministic Remainder Cents**: Fractional cents are resolved deterministically by awarding 1 cent to participants ordered by largest fractional remainder first; ties broken by lower SteamID64.
+- **Idempotency**: API requests include an `eventKey`. Once recorded in storage, subsequent calls return the existing record and perform no duplicate payouts.
 
 ## Public API (`KizShopAPI`)
 
@@ -159,6 +214,9 @@ public interface IKizStorage : IDisposable
 public static Task<decimal> GetBalanceAsync(ulong steamId);
 public static Task<bool> TryWithdrawAsync(ulong steamId, decimal amount, string reason = "API");
 public static Task<bool> DepositAsync(ulong steamId, decimal amount, string reason = "API");
+public static Task<bool> RewardAsync(ulong steamId, decimal amount, string reason, string eventKey = null);
+public static Task<BossRewardResult> DistributeBossRewardAsync(string eventKey, string bossName, decimal pool,
+    IReadOnlyDictionary<ulong, float> damageByPlayer, ulong lastHitSteamId = 0);
 
 // Sync methods (Deadlock-safe, cache-first)
 public static decimal GetBalance(ulong steamId);
@@ -166,5 +224,6 @@ public static bool TryWithdraw(ulong steamId, decimal amount, string reason = "A
 public static void Deposit(ulong steamId, decimal amount, string reason = "API");
 
 // Event
-public static event Action<ulong, Money, Money, string> OnBalanceChanged;
+public static event Action<ulong, decimal, decimal, string> OnBalanceChanged;
 ```
+

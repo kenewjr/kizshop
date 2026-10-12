@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using KizShop.Common;
+using KizShop.Economy.Models;
+using KizShop.Shop.Models;
 
 namespace KizShop.Storage
 {
@@ -17,5 +19,25 @@ namespace KizShop.Storage
         Task SetBalanceAsync(ulong steamId, Money amount, string reason);
         Task LogTransactionAsync(ulong steamId, string type, Money amount, string details);
         Task PruneLogsAsync(int retentionDays);
+
+        // Boss Rewards
+        Task<bool> HasRewardEventAsync(string eventKey);
+        Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc);
+
+        // Dynamic Pricing
+        Task<ItemPriceState> GetItemPriceStateAsync(ushort itemId);
+        Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc);
+        Task ResetItemPriceStateAsync(ushort? itemId);
+
+        // Bounties
+        Task<int> CreateBountyAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc);
+        Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50);
+        Task<Money> GetTotalBountyOnTargetAsync(ulong targetSteamId);
+        Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId);
+        Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc);
+
+        // Daily Claims
+        Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc);
+        Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak);
     }
 }

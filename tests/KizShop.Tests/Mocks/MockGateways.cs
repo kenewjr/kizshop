@@ -192,6 +192,22 @@ namespace KizShop.Tests.Mocks
             }
             return Task.FromResult(false);
         }
+
+        public InventoryItemInstance EquippedItem { get; set; }
+
+        public Task<InventoryItemInstance> GetEquippedItemAsync(ulong steamId)
+        {
+            return Task.FromResult(EquippedItem);
+        }
+
+        public Task<List<InventoryItemInstance>> GetAllGearItemsAsync(ulong steamId)
+        {
+            // Exclude equipped item
+            var list = GearItems
+                .Where(i => EquippedItem == null || !ReferenceEquals(i.Item, EquippedItem.Item))
+                .ToList();
+            return Task.FromResult(list);
+        }
     }
 
     public class MockVehicleGateway : IVehicleGateway

@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using KizShop.Common;
+using KizShop.Economy.Models;
+using KizShop.Shop.Models;
 
 namespace KizShop.Storage
 {
@@ -70,6 +72,39 @@ namespace KizShop.Storage
 
                         CREATE INDEX IF NOT EXISTS idx_kiz_tx_steam ON kiz_transactions(steam_id);
                         CREATE INDEX IF NOT EXISTS idx_kiz_tx_time ON kiz_transactions(timestamp);
+
+                        CREATE TABLE IF NOT EXISTS kiz_reward_events (
+                            event_key TEXT PRIMARY KEY,
+                            boss_name TEXT NOT NULL,
+                            pool INTEGER NOT NULL,
+                            timestamp TEXT NOT NULL
+                        );
+
+                        CREATE TABLE IF NOT EXISTS kiz_item_prices (
+                            item_id INTEGER PRIMARY KEY,
+                            sell_pressure TEXT NOT NULL,
+                            buy_pressure TEXT NOT NULL,
+                            last_updated TEXT NOT NULL
+                        );
+
+                        CREATE TABLE IF NOT EXISTS kiz_bounties (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            placer_steam_id TEXT NOT NULL,
+                            target_steam_id TEXT NOT NULL,
+                            escrow_cents INTEGER NOT NULL,
+                            net_cents INTEGER NOT NULL,
+                            created_utc TEXT NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_kiz_bounties_target ON kiz_bounties(target_steam_id);
+                        CREATE INDEX IF NOT EXISTS idx_kiz_bounties_placer ON kiz_bounties(placer_steam_id);
+                        CREATE INDEX IF NOT EXISTS idx_kiz_bounties_created ON kiz_bounties(created_utc);
+
+                        CREATE TABLE IF NOT EXISTS kiz_daily_claims (
+                            steam_id TEXT PRIMARY KEY,
+                            last_claim_day_index INTEGER NOT NULL,
+                            streak INTEGER NOT NULL,
+                            last_claimed_utc TEXT NOT NULL
+                        );
 
                         INSERT OR IGNORE INTO schema_version (version, applied_at) 
                         VALUES (2, datetime('now'));
@@ -572,6 +607,522 @@ namespace KizShop.Storage
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText = "DELETE FROM kiz_transactions WHERE timestamp < @cutoff;";
                     cmd.Parameters.AddWithValue("@cutoff", cutoff);
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<bool> HasRewardEventAsync(string eventKey)
+        {
+            if (string.IsNullOrEmpty(eventKey)) return false;
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT 1 FROM kiz_reward_events WHERE event_key = @k LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@k", eventKey);
+                    var res = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    return res != null;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc)
+        {
+            if (string.IsNullOrEmpty(eventKey)) return;
+            await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        INSERT OR REPLACE INTO kiz_reward_events (event_key, boss_name, pool, timestamp)
+                        VALUES (@k, @b, @p, @t);
+                    ";
+                    cmd.Parameters.AddWithValue("@k", eventKey);
+                    cmd.Parameters.AddWithValue("@b", bossName ?? string.Empty);
+                    cmd.Parameters.AddWithValue("@p", pool.Cents);
+                    cmd.Parameters.AddWithValue("@t", timestampUtc.ToString("o"));
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<ItemPriceState> GetItemPriceStateAsync(ushort itemId)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT sell_pressure, buy_pressure, last_updated FROM kiz_item_prices WHERE item_id = @id LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@id", (int)itemId);
+
+                    using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    if (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        var spStr = reader.GetString(0);
+                        var bpStr = reader.GetString(1);
+                        var luStr = reader.GetString(2);
+                        decimal.TryParse(spStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var sp);
+                        decimal.TryParse(bpStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var bp);
+                        DateTime.TryParse(luStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var lu);
+                        return new ItemPriceState
+                        {
+                            ItemId = itemId,
+                            SellPressure = sp,
+                            BuyPressure = bp,
+                            LastUpdatedUtc = lu
+                        };
+                    }
+
+                    return new ItemPriceState
+                    {
+                        ItemId = itemId,
+                        SellPressure = 0,
+                        BuyPressure = 0,
+                        LastUpdatedUtc = DateTime.MinValue
+                    };
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc)
+        {
+            await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    decimal currentSell = 0;
+                    decimal currentBuy = 0;
+
+                    using (var selectCmd = conn.CreateCommand())
+                    {
+                        selectCmd.CommandText = "SELECT sell_pressure, buy_pressure FROM kiz_item_prices WHERE item_id = @id LIMIT 1;";
+                        selectCmd.Parameters.AddWithValue("@id", (int)itemId);
+                        using var reader = await selectCmd.ExecuteReaderAsync().ConfigureAwait(false);
+                        if (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            decimal.TryParse(reader.GetString(0), NumberStyles.Any, CultureInfo.InvariantCulture, out currentSell);
+                            decimal.TryParse(reader.GetString(1), NumberStyles.Any, CultureInfo.InvariantCulture, out currentBuy);
+                        }
+                    }
+
+                    var newSell = Math.Max(0m, currentSell + sellDelta);
+                    var newBuy = Math.Max(0m, currentBuy + buyDelta);
+
+                    using (var upsertCmd = conn.CreateCommand())
+                    {
+                        upsertCmd.CommandText = @"
+                            INSERT OR REPLACE INTO kiz_item_prices (item_id, sell_pressure, buy_pressure, last_updated)
+                            VALUES (@id, @sp, @bp, @lu);
+                        ";
+                        upsertCmd.Parameters.AddWithValue("@id", (int)itemId);
+                        upsertCmd.Parameters.AddWithValue("@sp", newSell.ToString(CultureInfo.InvariantCulture));
+                        upsertCmd.Parameters.AddWithValue("@bp", newBuy.ToString(CultureInfo.InvariantCulture));
+                        upsertCmd.Parameters.AddWithValue("@lu", nowUtc.ToString("o"));
+                        await upsertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task ResetItemPriceStateAsync(ushort? itemId)
+        {
+            await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    if (itemId.HasValue)
+                    {
+                        cmd.CommandText = "DELETE FROM kiz_item_prices WHERE item_id = @id;";
+                        cmd.Parameters.AddWithValue("@id", (int)itemId.Value);
+                    }
+                    else
+                    {
+                        cmd.CommandText = "DELETE FROM kiz_item_prices;";
+                    }
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> CreateBountyAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        INSERT INTO kiz_bounties (placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc)
+                        VALUES (@p, @t, @e, @n, @c);
+                        SELECT last_insert_rowid();
+                    ";
+                    cmd.Parameters.AddWithValue("@p", placerSteamId.ToString());
+                    cmd.Parameters.AddWithValue("@t", targetSteamId.ToString());
+                    cmd.Parameters.AddWithValue("@e", escrowAmount.Cents);
+                    cmd.Parameters.AddWithValue("@n", netAmount.Cents);
+                    cmd.Parameters.AddWithValue("@c", createdUtc.ToString("o"));
+
+                    var idObj = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    return Convert.ToInt32(idObj);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        SELECT id, placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc
+                        FROM kiz_bounties
+                        ORDER BY net_cents DESC
+                        LIMIT @lim;
+                    ";
+                    cmd.Parameters.AddWithValue("@lim", limit);
+
+                    var list = new List<BountyEntry>();
+                    using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        ulong.TryParse(reader.GetString(1), out var placer);
+                        ulong.TryParse(reader.GetString(2), out var target);
+                        DateTime.TryParse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var cr);
+
+                        list.Add(new BountyEntry
+                        {
+                            Id = reader.GetInt32(0),
+                            PlacerSteamId = placer,
+                            TargetSteamId = target,
+                            EscrowAmount = Money.FromCents(reader.GetInt64(3)),
+                            NetAmount = Money.FromCents(reader.GetInt64(4)),
+                            CreatedUtc = cr
+                        });
+                    }
+                    return list;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<Money> GetTotalBountyOnTargetAsync(ulong targetSteamId)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT COALESCE(SUM(net_cents), 0) FROM kiz_bounties WHERE target_steam_id = @t;";
+                    cmd.Parameters.AddWithValue("@t", targetSteamId.ToString());
+
+                    var res = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    return Money.FromCents(Convert.ToInt64(res));
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var tx = conn.BeginTransaction();
+                    long totalCents = 0;
+
+                    using (var sumCmd = conn.CreateCommand())
+                    {
+                        sumCmd.Transaction = tx;
+                        sumCmd.CommandText = "SELECT COALESCE(SUM(net_cents), 0) FROM kiz_bounties WHERE target_steam_id = @t AND placer_steam_id != @k;";
+                        sumCmd.Parameters.AddWithValue("@t", targetSteamId.ToString());
+                        sumCmd.Parameters.AddWithValue("@k", killerSteamId.ToString());
+                        var res = await sumCmd.ExecuteScalarAsync().ConfigureAwait(false);
+                        totalCents = Convert.ToInt64(res);
+                    }
+
+                    if (totalCents > 0)
+                    {
+                        using var delCmd = conn.CreateCommand();
+                        delCmd.Transaction = tx;
+                        delCmd.CommandText = "DELETE FROM kiz_bounties WHERE target_steam_id = @t AND placer_steam_id != @k;";
+                        delCmd.Parameters.AddWithValue("@t", targetSteamId.ToString());
+                        delCmd.Parameters.AddWithValue("@k", killerSteamId.ToString());
+                        await delCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+
+                    tx.Commit();
+                    return Money.FromCents(totalCents);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var tx = conn.BeginTransaction();
+                    var list = new List<BountyEntry>();
+
+                    using (var selectCmd = conn.CreateCommand())
+                    {
+                        selectCmd.Transaction = tx;
+                        selectCmd.CommandText = @"
+                            SELECT id, placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc
+                            FROM kiz_bounties
+                            WHERE created_utc < @co;
+                        ";
+                        selectCmd.Parameters.AddWithValue("@co", cutoffUtc.ToString("o"));
+
+                        using var reader = await selectCmd.ExecuteReaderAsync().ConfigureAwait(false);
+                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            ulong.TryParse(reader.GetString(1), out var placer);
+                            ulong.TryParse(reader.GetString(2), out var target);
+                            DateTime.TryParse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var cr);
+
+                            list.Add(new BountyEntry
+                            {
+                                Id = reader.GetInt32(0),
+                                PlacerSteamId = placer,
+                                TargetSteamId = target,
+                                EscrowAmount = Money.FromCents(reader.GetInt64(3)),
+                                NetAmount = Money.FromCents(reader.GetInt64(4)),
+                                CreatedUtc = cr
+                            });
+                        }
+                    }
+
+                    if (list.Count > 0)
+                    {
+                        using var delCmd = conn.CreateCommand();
+                        delCmd.Transaction = tx;
+                        delCmd.CommandText = "DELETE FROM kiz_bounties WHERE created_utc < @co;";
+                        delCmd.Parameters.AddWithValue("@co", cutoffUtc.ToString("o"));
+                        await delCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+
+                    tx.Commit();
+                    return list;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var tx = conn.BeginTransaction();
+
+                    int? lastDay = null;
+                    int currentStreak = 0;
+
+                    using (var selCmd = conn.CreateCommand())
+                    {
+                        selCmd.Transaction = tx;
+                        selCmd.CommandText = "SELECT last_claim_day_index, streak FROM kiz_daily_claims WHERE steam_id = @id LIMIT 1;";
+                        selCmd.Parameters.AddWithValue("@id", steamId.ToString());
+                        using var reader = await selCmd.ExecuteReaderAsync().ConfigureAwait(false);
+                        if (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            lastDay = reader.GetInt32(0);
+                            currentStreak = reader.GetInt32(1);
+                        }
+                    }
+
+                    if (!lastDay.HasValue)
+                    {
+                        using (var insCmd = conn.CreateCommand())
+                        {
+                            insCmd.Transaction = tx;
+                            insCmd.CommandText = @"
+                                INSERT INTO kiz_daily_claims (steam_id, last_claim_day_index, streak, last_claimed_utc)
+                                VALUES (@id, @d, 1, @t);
+                            ";
+                            insCmd.Parameters.AddWithValue("@id", steamId.ToString());
+                            insCmd.Parameters.AddWithValue("@d", currentDayIndex);
+                            insCmd.Parameters.AddWithValue("@t", nowUtc.ToString("o"));
+                            await insCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                        }
+                        tx.Commit();
+                        return new DailyClaimResult
+                        {
+                            Allowed = true,
+                            Streak = 1,
+                            PreviousDayIndex = -1,
+                            PreviousStreak = 0
+                        };
+                    }
+
+                    if (lastDay.Value == currentDayIndex)
+                    {
+                        tx.Commit();
+                        return new DailyClaimResult
+                        {
+                            Allowed = false,
+                            Streak = currentStreak,
+                            PreviousDayIndex = lastDay.Value,
+                            PreviousStreak = currentStreak
+                        };
+                    }
+
+                    int prevDay = lastDay.Value;
+                    int prevStreak = currentStreak;
+                    int newStreak = (prevDay == currentDayIndex - 1)
+                        ? Math.Min(prevStreak + 1, maxStreakDays)
+                        : 1;
+
+                    using (var updCmd = conn.CreateCommand())
+                    {
+                        updCmd.Transaction = tx;
+                        updCmd.CommandText = @"
+                            UPDATE kiz_daily_claims 
+                            SET last_claim_day_index = @d, streak = @s, last_claimed_utc = @t
+                            WHERE steam_id = @id;
+                        ";
+                        updCmd.Parameters.AddWithValue("@id", steamId.ToString());
+                        updCmd.Parameters.AddWithValue("@d", currentDayIndex);
+                        updCmd.Parameters.AddWithValue("@s", newStreak);
+                        updCmd.Parameters.AddWithValue("@t", nowUtc.ToString("o"));
+                        await updCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+
+                    tx.Commit();
+                    return new DailyClaimResult
+                    {
+                        Allowed = true,
+                        Streak = newStreak,
+                        PreviousDayIndex = prevDay,
+                        PreviousStreak = prevStreak
+                    };
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak)
+        {
+            await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    if (previousDayIndex < 0)
+                    {
+                        cmd.CommandText = "DELETE FROM kiz_daily_claims WHERE steam_id = @id;";
+                        cmd.Parameters.AddWithValue("@id", steamId.ToString());
+                    }
+                    else
+                    {
+                        cmd.CommandText = "UPDATE kiz_daily_claims SET last_claim_day_index = @d, streak = @s WHERE steam_id = @id;";
+                        cmd.Parameters.AddWithValue("@id", steamId.ToString());
+                        cmd.Parameters.AddWithValue("@d", previousDayIndex);
+                        cmd.Parameters.AddWithValue("@s", previousStreak);
+                    }
                     await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
                 finally

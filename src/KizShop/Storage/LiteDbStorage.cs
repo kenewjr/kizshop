@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using LiteDB;
 using KizShop.Common;
+using KizShop.Economy.Models;
+using KizShop.Shop.Models;
 
 namespace KizShop.Storage
 {
@@ -42,6 +44,44 @@ namespace KizShop.Storage
             public DateTime AppliedAt { get; set; }
         }
 
+        public class RewardEventDoc
+        {
+            [BsonId]
+            public string EventKey { get; set; }
+            public string BossName { get; set; }
+            public long PoolCents { get; set; }
+            public DateTime Timestamp { get; set; }
+        }
+
+        public class ItemPriceStateDoc
+        {
+            [BsonId]
+            public int ItemId { get; set; }
+            public decimal SellPressure { get; set; }
+            public decimal BuyPressure { get; set; }
+            public DateTime LastUpdatedUtc { get; set; }
+        }
+
+        public class BountyDoc
+        {
+            [BsonId]
+            public int Id { get; set; }
+            public long PlacerSteamId { get; set; }
+            public long TargetSteamId { get; set; }
+            public long EscrowCents { get; set; }
+            public long NetCents { get; set; }
+            public DateTime CreatedUtc { get; set; }
+        }
+
+        public class DailyClaimDoc
+        {
+            [BsonId]
+            public long SteamId { get; set; }
+            public int LastClaimDayIndex { get; set; }
+            public int Streak { get; set; }
+            public DateTime LastClaimedUtc { get; set; }
+        }
+
         public LiteDbStorage(string dbPath, IClock clock = null)
         {
             _dbPath = dbPath ?? throw new ArgumentNullException(nameof(dbPath));
@@ -72,6 +112,20 @@ namespace KizShop.Storage
                     var txs = _db.GetCollection<TransactionDoc>("transactions");
                     txs.EnsureIndex(x => x.SteamId);
                     txs.EnsureIndex(x => x.Timestamp);
+
+                    var rewards = _db.GetCollection<RewardEventDoc>("reward_events");
+                    rewards.EnsureIndex(x => x.EventKey, true);
+
+                    var prices = _db.GetCollection<ItemPriceStateDoc>("item_prices");
+                    prices.EnsureIndex(x => x.ItemId, true);
+
+                    var bounties = _db.GetCollection<BountyDoc>("bounties");
+                    bounties.EnsureIndex(x => x.TargetSteamId);
+                    bounties.EnsureIndex(x => x.PlacerSteamId);
+                    bounties.EnsureIndex(x => x.CreatedUtc);
+
+                    var dailies = _db.GetCollection<DailyClaimDoc>("daily_claims");
+                    dailies.EnsureIndex(x => x.SteamId, true);
                 }
             }).ConfigureAwait(false);
         }
@@ -335,6 +389,312 @@ namespace KizShop.Storage
                 AmountCents = amountCents,
                 Details = details ?? string.Empty
             });
+        }
+
+        public async Task<bool> HasRewardEventAsync(string eventKey)
+        {
+            if (string.IsNullOrEmpty(eventKey)) return false;
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<RewardEventDoc>("reward_events");
+                    return coll.Exists(Query.EQ("_id", eventKey));
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc)
+        {
+            if (string.IsNullOrEmpty(eventKey)) return;
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<RewardEventDoc>("reward_events");
+                    coll.Upsert(new RewardEventDoc
+                    {
+                        EventKey = eventKey,
+                        BossName = bossName ?? string.Empty,
+                        PoolCents = pool.Cents,
+                        Timestamp = timestampUtc
+                    });
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<ItemPriceState> GetItemPriceStateAsync(ushort itemId)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<ItemPriceStateDoc>("item_prices");
+                    var doc = coll.FindById((int)itemId);
+                    if (doc == null)
+                    {
+                        return new ItemPriceState
+                        {
+                            ItemId = itemId,
+                            SellPressure = 0,
+                            BuyPressure = 0,
+                            LastUpdatedUtc = DateTime.MinValue
+                        };
+                    }
+                    return new ItemPriceState
+                    {
+                        ItemId = (ushort)doc.ItemId,
+                        SellPressure = doc.SellPressure,
+                        BuyPressure = doc.BuyPressure,
+                        LastUpdatedUtc = doc.LastUpdatedUtc
+                    };
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<ItemPriceStateDoc>("item_prices");
+                    var doc = coll.FindById((int)itemId);
+                    if (doc == null)
+                    {
+                        doc = new ItemPriceStateDoc
+                        {
+                            ItemId = (int)itemId,
+                            SellPressure = Math.Max(0m, sellDelta),
+                            BuyPressure = Math.Max(0m, buyDelta),
+                            LastUpdatedUtc = nowUtc
+                        };
+                    }
+                    else
+                    {
+                        doc.SellPressure = Math.Max(0m, doc.SellPressure + sellDelta);
+                        doc.BuyPressure = Math.Max(0m, doc.BuyPressure + buyDelta);
+                        doc.LastUpdatedUtc = nowUtc;
+                    }
+                    coll.Upsert(doc);
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task ResetItemPriceStateAsync(ushort? itemId)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<ItemPriceStateDoc>("item_prices");
+                    if (itemId.HasValue)
+                    {
+                        coll.Delete((int)itemId.Value);
+                    }
+                    else
+                    {
+                        coll.DeleteAll();
+                    }
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> CreateBountyAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    var doc = new BountyDoc
+                    {
+                        PlacerSteamId = (long)placerSteamId,
+                        TargetSteamId = (long)targetSteamId,
+                        EscrowCents = escrowAmount.Cents,
+                        NetCents = netAmount.Cents,
+                        CreatedUtc = createdUtc
+                    };
+                    var id = coll.Insert(doc);
+                    return id.AsInt32;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    var docs = coll.FindAll().OrderByDescending(x => x.NetCents).Take(limit).ToList();
+                    var list = new List<BountyEntry>(docs.Count);
+                    foreach (var d in docs)
+                    {
+                        list.Add(new BountyEntry
+                        {
+                            Id = d.Id,
+                            PlacerSteamId = (ulong)d.PlacerSteamId,
+                            TargetSteamId = (ulong)d.TargetSteamId,
+                            EscrowAmount = Money.FromCents(d.EscrowCents),
+                            NetAmount = Money.FromCents(d.NetCents),
+                            CreatedUtc = d.CreatedUtc
+                        });
+                    }
+                    return list;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<Money> GetTotalBountyOnTargetAsync(ulong targetSteamId)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    var docs = coll.Find(x => x.TargetSteamId == (long)targetSteamId);
+                    long total = 0;
+                    foreach (var d in docs)
+                    {
+                        total += d.NetCents;
+                    }
+                    return Money.FromCents(total);
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    var docs = coll.Find(x => x.TargetSteamId == (long)targetSteamId && x.PlacerSteamId != (long)killerSteamId).ToList();
+                    if (docs.Count == 0) return Money.Zero;
+
+                    long total = 0;
+                    foreach (var d in docs)
+                    {
+                        total += d.NetCents;
+                        coll.Delete(d.Id);
+                    }
+                    return Money.FromCents(total);
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    var docs = coll.Find(x => x.CreatedUtc < cutoffUtc).ToList();
+                    var list = new List<BountyEntry>(docs.Count);
+                    foreach (var d in docs)
+                    {
+                        list.Add(new BountyEntry
+                        {
+                            Id = d.Id,
+                            PlacerSteamId = (ulong)d.PlacerSteamId,
+                            TargetSteamId = (ulong)d.TargetSteamId,
+                            EscrowAmount = Money.FromCents(d.EscrowCents),
+                            NetAmount = Money.FromCents(d.NetCents),
+                            CreatedUtc = d.CreatedUtc
+                        });
+                        coll.Delete(d.Id);
+                    }
+                    return list;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<DailyClaimDoc>("daily_claims");
+                    var doc = coll.FindById((long)steamId);
+                    if (doc == null)
+                    {
+                        coll.Insert(new DailyClaimDoc
+                        {
+                            SteamId = (long)steamId,
+                            LastClaimDayIndex = currentDayIndex,
+                            Streak = 1,
+                            LastClaimedUtc = nowUtc
+                        });
+                        return new DailyClaimResult
+                        {
+                            Allowed = true,
+                            Streak = 1,
+                            PreviousDayIndex = -1,
+                            PreviousStreak = 0
+                        };
+                    }
+
+                    if (doc.LastClaimDayIndex == currentDayIndex)
+                    {
+                        return new DailyClaimResult
+                        {
+                            Allowed = false,
+                            Streak = doc.Streak,
+                            PreviousDayIndex = doc.LastClaimDayIndex,
+                            PreviousStreak = doc.Streak
+                        };
+                    }
+
+                    int prevDay = doc.LastClaimDayIndex;
+                    int prevStreak = doc.Streak;
+                    int newStreak = (doc.LastClaimDayIndex == currentDayIndex - 1)
+                        ? Math.Min(doc.Streak + 1, maxStreakDays)
+                        : 1;
+
+                    doc.LastClaimDayIndex = currentDayIndex;
+                    doc.Streak = newStreak;
+                    doc.LastClaimedUtc = nowUtc;
+                    coll.Update(doc);
+
+                    return new DailyClaimResult
+                    {
+                        Allowed = true,
+                        Streak = newStreak,
+                        PreviousDayIndex = prevDay,
+                        PreviousStreak = prevStreak
+                    };
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<DailyClaimDoc>("daily_claims");
+                    if (previousDayIndex < 0)
+                    {
+                        coll.Delete((long)steamId);
+                    }
+                    else
+                    {
+                        var doc = coll.FindById((long)steamId);
+                        if (doc != null)
+                        {
+                            doc.LastClaimDayIndex = previousDayIndex;
+                            doc.Streak = previousStreak;
+                            coll.Update(doc);
+                        }
+                    }
+                }
+            }).ConfigureAwait(false);
         }
 
         public void Dispose()

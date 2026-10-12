@@ -10,6 +10,7 @@ using SDG.Unturned;
 using Xunit;
 using KizShop.Common;
 using KizShop.Economy;
+using KizShop.Economy.Models;
 using KizShop.Shop;
 using KizShop.Shop.Gateways;
 using KizShop.Shop.Models;
@@ -294,6 +295,20 @@ namespace KizShop.Tests
             public Task SetBalanceAsync(ulong steamId, Money amount, string reason) => Task.CompletedTask;
             public Task LogTransactionAsync(ulong steamId, string type, Money amount, string details) => Task.CompletedTask;
             public Task PruneLogsAsync(int retentionDays) => Task.CompletedTask;
+
+            public Task<bool> HasRewardEventAsync(string eventKey) => Task.FromResult(false);
+            public Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc) => Task.CompletedTask;
+            public Task<ItemPriceState> GetItemPriceStateAsync(ushort itemId) => Task.FromResult(new ItemPriceState { ItemId = itemId });
+            public Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc) => Task.CompletedTask;
+            public Task ResetItemPriceStateAsync(ushort? itemId) => Task.CompletedTask;
+            public Task<int> CreateBountyAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc) => Task.FromResult(1);
+            public Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50) => Task.FromResult(new List<BountyEntry>());
+            public Task<Money> GetTotalBountyOnTargetAsync(ulong targetSteamId) => Task.FromResult(Money.Zero);
+            public Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId) => Task.FromResult(Money.Zero);
+            public Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc) => Task.FromResult(new List<BountyEntry>());
+            public Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc) => Task.FromResult(new DailyClaimResult { Allowed = true, Streak = 1 });
+            public Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak) => Task.CompletedTask;
+
             public void Dispose() { }
         }
 

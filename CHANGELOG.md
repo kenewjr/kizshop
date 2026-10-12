@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-12
+
+### Added
+- **Combat Tag**:
+  - Added combat tagging on PvP damage events (`DamageTool.damagePlayerRequested`), tagging attacker and victim for `CombatTagSeconds` (default 20s).
+  - Configurable action blockers: `CombatTagBlocksBuy`, `CombatTagBlocksSell`, `CombatTagBlocksVehicle`.
+  - Cleaned tags automatically on death and disconnect (`Provider.onEnemyDisconnected`).
+  - Added `ICombatTagService` with testable `MockClock` integration.
+  - Added `kizshop.bypass.combattag` permission to bypass combat tag restrictions.
+- **Shop Categories and Search**:
+  - Added `Category` property to `ItemShopEntry` (default `"General"`) and `VehicleShopEntry` (default `"Vehicles"`) with backward-compatible catalog JSON deserialization.
+  - Enhanced `/shop` command: `/shop` (category overview with counts & page hint), `/shop categories`, `/shop <page>`, `/shop <category> [page]`, and `/shop search <text> [page]`.
+  - Added prefix matching and ambiguity detection for category names; rejected purely numeric or control-character categories.
+  - Added admin commands: `/kizshop setcategory <id> <category>`, with trailing category parameter supported in `/kizshop additem` and `/kizshop addveh`.
+- **Uconomy Import Tool**:
+  - Added `/kizshop import uconomy <mysql|csv> [overwrite] [apply]` with `kizshop.import` permission.
+  - Default dry-run mode reporting anticipated changes without modifying storage.
+  - Idempotent migration from CSV (`uconomy_import.csv`) or MySQL tables with 17-digit SteamID validation and limit checks.
+- **Boss Reward API**:
+  - Added `KizShopAPI.RewardAsync` and `KizShopAPI.DistributeBossRewardAsync` (callable from any thread without deadlocks).
+  - Pure function `BossRewardCalculator` ensuring distributed integer cents sum to exactly 100% of the prize pool.
+  - Deterministic remainder cent distribution (highest fractional remainder first, broken by lower SteamID64).
+  - Storage idempotency via unique `eventKey` recording in `kiz_reward_events` / `reward_events`.
+- **Dynamic Pricing**:
+  - Added optional dynamic pricing to catalog items (`SellDecayPerUnit`, `MinSellMultiplier`, `RecoveryPerHour`, `BuyIncreasePerUnit`, `MaxBuyMultiplier`).
+  - Added `PriceCalculator` pure function computing sequential multi-unit transactions, linear recovery over mocked time, and strict sell <= buy price clamping.
+  - Thread-safe storage pressure tracking (`kiz_item_prices` / `item_prices`) updated only after successful transaction delivery and payment.
+  - Added admin command `/kizshop resetpricing <id|all>`.
+- **/sell hand & /sell all <category>**:
+  - Added `/sell hand [amount]` selling held item instance from hands grid, marshalled to main thread, with gun attachment verification.
+  - Added `/sell all <category>` providing summary preview with 30-second confirmation window (`/sell all <category> confirm`) and 0-cent delta inventory protection.
+- **Bounty & Daily Reward Systems**:
+  - Added `/bounty set <target> <amount>` with escrow deduction, configurable fee sink (`BountyFeePercent`), and hourly expiry sweep.
+  - Added `/bounty list [page]` and `/bounty me`.
+  - Atomic PvP kill bounty claim (`ClaimBountiesAsync`) preventing double-claims and preventing placers from claiming their own bounties.
+  - Added `/daily` reward with streak progression, configurable streak bonus cap, gap day reset, and UTC offset support.
+- **New Permissions**:
+  - Documented `kizshop.bounty`, `kizshop.daily`, `kizshop.bypass.combattag`, `kizshop.import`.
+
 ## [0.3.0] - 2026-10-12
 
 ### Removed

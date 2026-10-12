@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Rocket.API;
 using Rocket.Unturned.Chat;
 using KizShop.Common;
+using KizShop.Economy;
 using KizShop.Shop.Models;
 
 namespace KizShop.Commands
@@ -15,7 +17,7 @@ namespace KizShop.Commands
         public AllowedCaller AllowedCaller => AllowedCaller.Both;
         public string Name => "kizshop";
         public string Help => "Admin command to manage KizShop.";
-        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>";
+        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import>";
         public List<string> Aliases => new List<string> { "ks" };
         public List<string> Permissions => new List<string> { "kizshop.admin" };
 
@@ -37,7 +39,6 @@ namespace KizShop.Commands
                     return;
                 }
 
-                // Re-parse arguments to handle quoted strings with spaces
                 var args = ParseQuotedArgs(command);
                 string action = args[0].ToLowerInvariant();
 
@@ -55,7 +56,7 @@ namespace KizShop.Commands
                         break;
 
                     case "additem":
-                        // /kizshop additem <id> "<name>" <buyPrice> [sellPrice] [permission]
+                        // /kizshop additem <id> "<name>" <buyPrice> [sellPrice] [permission] [category]
                         if (args.Count < 4 || !ushort.TryParse(args[1], out var itemId) ||
                             !decimal.TryParse(args[3], NumberStyles.Number, CultureInfo.InvariantCulture, out var buyPrice))
                         {
@@ -71,6 +72,7 @@ namespace KizShop.Commands
                         }
 
                         string itemPerm = args.Count >= 6 ? args[5] : string.Empty;
+                        string itemCategory = args.Count >= 7 ? args[6] : "General";
 
                         string itemValError = plugin.Shop.AddOrUpdateItem(new ItemShopEntry
                         {
@@ -79,6 +81,7 @@ namespace KizShop.Commands
                             BuyPrice = buyPrice,
                             SellPrice = sellPrice,
                             Permission = itemPerm,
+                            Category = itemCategory,
                             Enabled = true
                         });
 
@@ -147,6 +150,7 @@ namespace KizShop.Commands
                         break;
 
                     case "addveh":
+                        // /kizshop addveh <id> "<name>" <buyPrice> [sellPrice] [permission] [category]
                         if (args.Count < 4 || !ushort.TryParse(args[1], out var vehId) ||
                             !decimal.TryParse(args[3], NumberStyles.Number, CultureInfo.InvariantCulture, out var vehBuyPrice))
                         {
@@ -162,6 +166,7 @@ namespace KizShop.Commands
                         }
 
                         string vehPerm = args.Count >= 6 ? args[5] : string.Empty;
+                        string vehCategory = args.Count >= 7 ? args[6] : "Vehicles";
 
                         string vehValErr = plugin.Shop.AddOrUpdateVehicle(new VehicleShopEntry
                         {
@@ -170,6 +175,7 @@ namespace KizShop.Commands
                             BuyPrice = vehBuyPrice,
                             SellPrice = vehSellPrice,
                             Permission = vehPerm,
+                            Category = vehCategory,
                             Enabled = true
                         });
 
@@ -237,13 +243,108 @@ namespace KizShop.Commands
                         });
                         break;
 
+                    case "setcategory":
+                        // /kizshop setcategory <id> <category>
+                        if (args.Count < 3 || !ushort.TryParse(args[1], out var setCatId))
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_setcategory_usage"), UnityEngine.Color.yellow));
+                            return;
+                        }
+
+                        string targetCategory = args[2];
+                        if (plugin.Shop.SetItemCategory(setCatId, targetCategory, out string setCatErr))
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_category_set", setCatId, targetCategory), UnityEngine.Color.green));
+                        }
+                        else
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("invalid_catalog_entry", setCatErr), UnityEngine.Color.red));
+                        }
+                        break;
+
+                    case "resetpricing":
+                        // /kizshop resetpricing <id|all>
+                        if (args.Count < 2)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_resetpricing_usage"), UnityEngine.Color.yellow));
+                            return;
+                        }
+
+                        string targetReset = args[1];
+                        if (targetReset.Equals("all", StringComparison.OrdinalIgnoreCase))
+                        {
+                            await plugin.Storage.ResetItemPriceStateAsync(null).ConfigureAwait(false);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_resetpricing_all_success"), UnityEngine.Color.green));
+                        }
+                        else if (ushort.TryParse(targetReset, out ushort resetItemId))
+                        {
+                            await plugin.Storage.ResetItemPriceStateAsync(resetItemId).ConfigureAwait(false);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_resetpricing_item_success", resetItemId), UnityEngine.Color.green));
+                        }
+                        else
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_resetpricing_usage"), UnityEngine.Color.yellow));
+                        }
+                        break;
+
+                    case "import":
+                        // /kizshop import uconomy <mysql|csv> [overwrite] [apply]
+                        bool canImport = caller is ConsolePlayer || caller.IsAdmin || caller.HasPermission("kizshop.import");
+                        if (!canImport)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("no_permission"), UnityEngine.Color.red));
+                            return;
+                        }
+
+                        if (args.Count < 3 || !args[1].Equals("uconomy", StringComparison.OrdinalIgnoreCase))
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_import_usage"), UnityEngine.Color.yellow));
+                            return;
+                        }
+
+                        string source = args[2].ToLowerInvariant();
+                        bool overwrite = args.Any(a => a.Equals("overwrite", StringComparison.OrdinalIgnoreCase));
+                        bool apply = args.Any(a => a.Equals("apply", StringComparison.OrdinalIgnoreCase));
+
+                        var importService = new UconomyImportService(plugin.Storage, () => plugin.Configuration.Instance, plugin.Directory);
+                        UconomyImportReport report;
+
+                        if (source == "csv")
+                        {
+                            report = await importService.ImportFromCsvAsync(overwrite, apply).ConfigureAwait(false);
+                        }
+                        else if (source == "mysql")
+                        {
+                            report = await importService.ImportFromMySqlAsync(overwrite, apply).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_import_usage"), UnityEngine.Color.yellow));
+                            return;
+                        }
+
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                        {
+                            KizChat.Say(caller, report.SummaryText, report.ErrorCount > 0 ? UnityEngine.Color.yellow : UnityEngine.Color.green);
+                        });
+                        KizLog.Info(report.SummaryText);
+                        break;
+
                     default:
                         plugin.Dispatcher.QueueOnMainThread(() =>
                             KizChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow));
                         break;
                 }
-
-                await Task.CompletedTask;
             });
         }
 

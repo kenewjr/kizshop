@@ -192,23 +192,167 @@ namespace KizShop.Shop
             }
         }
 
-        public (List<ItemShopEntry> entries, int totalPages) GetPagedItems(int page, int pageSize)
+        public static bool ValidateCategory(string category, out string error)
+        {
+            if (string.IsNullOrWhiteSpace(category))
+            {
+                error = "Category cannot be empty.";
+                return false;
+            }
+            category = category.Trim();
+            if (category.Length > 32)
+            {
+                error = "Category must be 32 characters or less.";
+                return false;
+            }
+            foreach (char c in category)
+            {
+                if (char.IsControl(c))
+                {
+                    error = "Category cannot contain control characters.";
+                    return false;
+                }
+            }
+            if (int.TryParse(category, out _))
+            {
+                error = "Category cannot be purely numeric.";
+                return false;
+            }
+            error = null;
+            return true;
+        }
+
+        public List<string> GetCategories()
         {
             lock (_lock)
             {
-                var enabledItems = _data.Items.Where(i => i.Enabled && i.Available).ToList();
-                int totalPages = (int)Math.Ceiling((double)enabledItems.Count / pageSize);
+                return _data.Items
+                    .Where(i => i.Enabled && i.Available && !string.IsNullOrWhiteSpace(i.Category))
+                    .Select(i => i.Category.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(c => c)
+                    .ToList();
+            }
+        }
+
+        public Dictionary<string, int> GetCategoryItemCounts()
+        {
+            lock (_lock)
+            {
+                var dict = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var item in _data.Items.Where(i => i.Enabled && i.Available))
+                {
+                    string cat = string.IsNullOrWhiteSpace(item.Category) ? "General" : item.Category.Trim();
+                    if (dict.ContainsKey(cat)) dict[cat]++;
+                    else dict[cat] = 1;
+                }
+                return dict;
+            }
+        }
+
+        public bool ResolveCategory(string query, out string matchedCategory, out List<string> candidates)
+        {
+            matchedCategory = null;
+            candidates = new List<string>();
+            if (string.IsNullOrWhiteSpace(query)) return false;
+
+            query = query.Trim();
+            var allCats = GetCategories();
+
+            // 1. Exact match (case-insensitive)
+            var exact = allCats.FirstOrDefault(c => c.Equals(query, StringComparison.OrdinalIgnoreCase));
+            if (exact != null)
+            {
+                matchedCategory = exact;
+                return true;
+            }
+
+            // 2. Prefix match (case-insensitive)
+            var prefixMatches = allCats.Where(c => c.StartsWith(query, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (prefixMatches.Count == 1)
+            {
+                matchedCategory = prefixMatches[0];
+                return true;
+            }
+            if (prefixMatches.Count > 1)
+            {
+                candidates = prefixMatches;
+                return false;
+            }
+
+            return false;
+        }
+
+        public (List<ItemShopEntry> entries, int totalPages, int totalItems) GetPagedItems(string category, int page, int pageSize)
+        {
+            lock (_lock)
+            {
+                var items = _data.Items.Where(i => i.Enabled && i.Available);
+                if (!string.IsNullOrWhiteSpace(category) && !category.Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    items = items.Where(i => (i.Category ?? "General").Equals(category, StringComparison.OrdinalIgnoreCase));
+                }
+
+                var list = items.ToList();
+                int totalItems = list.Count;
+                int totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
                 if (totalPages < 1) totalPages = 1;
                 if (page < 1) page = 1;
                 if (page > totalPages) page = totalPages;
 
-                var entries = enabledItems
-                    .Skip((page - 1) * pageSize)
-                    .Take(pageSize)
+                var paged = list.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+                return (paged, totalPages, totalItems);
+            }
+        }
+
+        public (List<ItemShopEntry> entries, int totalPages, int totalItems) Search(string text, int page, int pageSize)
+        {
+            lock (_lock)
+            {
+                text = text?.Trim() ?? string.Empty;
+                bool isId = ushort.TryParse(text, out ushort searchId);
+
+                var matches = _data.Items
+                    .Where(i => i.Enabled && i.Available &&
+                                ((isId && i.Id == searchId) ||
+                                 (!string.IsNullOrEmpty(i.Name) && i.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)))
                     .ToList();
 
-                return (entries, totalPages);
+                int totalItems = matches.Count;
+                int totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+                if (totalPages < 1) totalPages = 1;
+                if (page < 1) page = 1;
+                if (page > totalPages) page = totalPages;
+
+                var paged = matches.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+                return (paged, totalPages, totalItems);
             }
+        }
+
+        public bool SetItemCategory(ushort id, string category, out string error)
+        {
+            if (!ValidateCategory(category, out error)) return false;
+
+            lock (_lock)
+            {
+                var item = _data.Items.FirstOrDefault(i => i.Id == id);
+                if (item == null)
+                {
+                    error = $"Item ID {id} not found in shop.";
+                    return false;
+                }
+
+                item.Category = category.Trim();
+                Save();
+                error = null;
+                return true;
+            }
+        }
+
+        public (List<ItemShopEntry> entries, int totalPages) GetPagedItems(int page, int pageSize)
+        {
+            var res = GetPagedItems(null, page, pageSize);
+            return (res.entries, res.totalPages);
         }
 
         public string AddOrUpdateItem(ItemShopEntry entry)
@@ -232,6 +376,11 @@ namespace KizShop.Shop
                 }
             }
 
+            if (!string.IsNullOrWhiteSpace(entry.Category) && !ValidateCategory(entry.Category, out var catErr))
+            {
+                return $"Category error: {catErr}";
+            }
+
             lock (_lock)
             {
                 var existing = _data.Items.FirstOrDefault(i => i.Id == entry.Id);
@@ -244,9 +393,21 @@ namespace KizShop.Shop
                     existing.Enabled = entry.Enabled;
                     existing.Permission = entry.Permission;
                     existing.MaxAmountPerPurchase = entry.MaxAmountPerPurchase;
+                    if (!string.IsNullOrWhiteSpace(entry.Category))
+                    {
+                        existing.Category = entry.Category.Trim();
+                    }
+                    if (entry.DynamicPricing != null)
+                    {
+                        existing.DynamicPricing = entry.DynamicPricing;
+                    }
                 }
                 else
                 {
+                    if (string.IsNullOrWhiteSpace(entry.Category))
+                    {
+                        entry.Category = "General";
+                    }
                     _data.Items.Add(entry);
                 }
                 Save();
@@ -331,9 +492,17 @@ namespace KizShop.Shop
                     existing.SellPrice = entry.SellPrice;
                     existing.Enabled = entry.Enabled;
                     existing.Permission = entry.Permission;
+                    if (!string.IsNullOrWhiteSpace(entry.Category))
+                    {
+                        existing.Category = entry.Category.Trim();
+                    }
                 }
                 else
                 {
+                    if (string.IsNullOrWhiteSpace(entry.Category))
+                    {
+                        entry.Category = "Vehicles";
+                    }
                     _data.Vehicles.Add(entry);
                 }
                 Save();
@@ -392,20 +561,20 @@ namespace KizShop.Shop
             {
                 Items = new List<ItemShopEntry>
                 {
-                    new ItemShopEntry { Id = 15, Name = "Medkit", BuyPrice = 40.00m, SellPrice = 15.00m, Enabled = true },
-                    new ItemShopEntry { Id = 394, Name = "Dressing", BuyPrice = 15.00m, SellPrice = 5.00m, Enabled = true },
-                    new ItemShopEntry { Id = 253, Name = "Alicepack", BuyPrice = 250.00m, SellPrice = 80.00m, Enabled = true },
-                    new ItemShopEntry { Id = 18, Name = "Timberwolf", BuyPrice = 500.00m, SellPrice = 150.00m, Enabled = true },
-                    new ItemShopEntry { Id = 20, Name = "Timberwolf Magazine", BuyPrice = 75.00m, SellPrice = 25.00m, Enabled = true },
-                    new ItemShopEntry { Id = 81, Name = "MRE", BuyPrice = 20.00m, SellPrice = 5.00m, Enabled = true },
-                    new ItemShopEntry { Id = 14, Name = "Bottled Water", BuyPrice = 10.00m, SellPrice = 2.00m, Enabled = true }
+                    new ItemShopEntry { Id = 15, Name = "Medkit", BuyPrice = 40.00m, SellPrice = 15.00m, Category = "Medical", Enabled = true },
+                    new ItemShopEntry { Id = 394, Name = "Dressing", BuyPrice = 15.00m, SellPrice = 5.00m, Category = "Medical", Enabled = true },
+                    new ItemShopEntry { Id = 253, Name = "Alicepack", BuyPrice = 250.00m, SellPrice = 80.00m, Category = "Clothing", Enabled = true },
+                    new ItemShopEntry { Id = 18, Name = "Timberwolf", BuyPrice = 500.00m, SellPrice = 150.00m, Category = "Weapons", Enabled = true },
+                    new ItemShopEntry { Id = 20, Name = "Timberwolf Magazine", BuyPrice = 75.00m, SellPrice = 25.00m, Category = "Ammo", Enabled = true },
+                    new ItemShopEntry { Id = 81, Name = "MRE", BuyPrice = 20.00m, SellPrice = 5.00m, Category = "Food", Enabled = true },
+                    new ItemShopEntry { Id = 14, Name = "Bottled Water", BuyPrice = 10.00m, SellPrice = 2.00m, Category = "Food", Enabled = true }
                 },
                 Vehicles = new List<VehicleShopEntry>
                 {
-                    new VehicleShopEntry { Id = 1, Name = "Black Offroader", BuyPrice = 300.00m, SellPrice = 100.00m, Enabled = true },
-                    new VehicleShopEntry { Id = 33, Name = "Police Car", BuyPrice = 450.00m, SellPrice = 150.00m, Enabled = true },
-                    new VehicleShopEntry { Id = 59, Name = "Jeep", BuyPrice = 400.00m, SellPrice = 120.00m, Enabled = true },
-                    new VehicleShopEntry { Id = 93, Name = "Forest Huey", BuyPrice = 1500.00m, SellPrice = 500.00m, Enabled = true }
+                    new VehicleShopEntry { Id = 1, Name = "Black Offroader", BuyPrice = 300.00m, SellPrice = 100.00m, Category = "Vehicles", Enabled = true },
+                    new VehicleShopEntry { Id = 33, Name = "Police Car", BuyPrice = 450.00m, SellPrice = 150.00m, Category = "Vehicles", Enabled = true },
+                    new VehicleShopEntry { Id = 59, Name = "Jeep", BuyPrice = 400.00m, SellPrice = 120.00m, Category = "Vehicles", Enabled = true },
+                    new VehicleShopEntry { Id = 93, Name = "Forest Huey", BuyPrice = 1500.00m, SellPrice = 500.00m, Category = "Vehicles", Enabled = true }
                 }
             };
         }
