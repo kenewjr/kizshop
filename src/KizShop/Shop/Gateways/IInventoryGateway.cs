@@ -45,7 +45,7 @@ namespace KizShop.Shop.Gateways
         Task<byte> GetDefaultAmountAsync(ushort itemId);
         Task<CheckSpaceResult> CheckSpaceAsync(ulong steamId, ushort itemId, int count);
         Task<Item> CreateItemAsync(ushort itemId);
-        Task<bool> TryAddItemAsync(ulong steamId, Item item);
+        Task<bool> TryAddItemAsync(ulong steamId, Item item, bool autoEquip = false);
         Task<bool> RemoveItemByReferenceAsync(ulong steamId, Item item);
         Task<bool> RemoveItemAtAsync(ulong steamId, byte page, byte index);
     }

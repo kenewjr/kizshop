@@ -154,8 +154,11 @@ namespace KizShop.Tests.Mocks
             return Task.FromResult(new Item(itemId, defaultAmount, 100, state));
         }
 
-        public Task<bool> TryAddItemAsync(ulong steamId, Item item)
+        public List<bool> RecordedAutoEquipFlags { get; } = new List<bool>();
+
+        public Task<bool> TryAddItemAsync(ulong steamId, Item item, bool autoEquip = false)
         {
+            RecordedAutoEquipFlags.Add(autoEquip);
             if (ThrowOnDelivery) throw new InvalidOperationException("Simulated inventory crash");
             if (DeliveredItems.Count >= MaxDeliveryCountBeforeFailure) return Task.FromResult(false);
 

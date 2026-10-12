@@ -154,10 +154,11 @@ namespace KizShop.Shop
 
                 try
                 {
+                    bool autoEquip = _configProvider().AutoEquipPurchasedItems;
                     for (int i = 0; i < quantity; i++)
                     {
                         var item = await _inventoryGateway.CreateItemAsync(entry.Id).ConfigureAwait(false);
-                        if (await _inventoryGateway.TryAddItemAsync(steamId, item).ConfigureAwait(false))
+                        if (await _inventoryGateway.TryAddItemAsync(steamId, item, autoEquip).ConfigureAwait(false))
                         {
                             deliveredItems.Add(item);
                         }

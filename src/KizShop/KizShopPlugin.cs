@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Rocket.API;
@@ -120,7 +122,7 @@ namespace KizShop
             { "reward_mega_zombie_kill", "<color=gold>+ {0} for MEGA zombie kill!</color>" },
             { "reward_playtime", "<color=green>+ {0} playtime income reward!</color>" },
 
-            { "kizshop_admin_usage", "Usage: /kizshop <reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>" },
+            { "kizshop_admin_usage", "Usage: /kizshop <version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>" },
             { "kizshop_additem_usage", "Usage: /kizshop additem <id> \"<name>\" <buyPrice> [sellPrice] [permission]" },
             { "kizshop_removeitem_usage", "Usage: /kizshop removeitem <id>" },
             { "kizshop_setitemprice_usage", "Usage: /kizshop setitemprice <id> <buyPrice> [sellPrice]" },
@@ -241,7 +243,8 @@ namespace KizShop
                 // 6. Start Playtime Income Loop
                 StartPlaytimeLoop();
 
-                Logger.Log("[KizShop] Plugin loaded successfully.");
+                int mainThreadId = (Dispatcher as RocketMainThreadDispatcher)?.MainThreadId ?? Thread.CurrentThread.ManagedThreadId;
+                Logger.Log(GetBuildIdentification(mainThreadId));
             }
             catch (Exception ex)
             {
@@ -336,6 +339,28 @@ namespace KizShop
             {
                 Logger.LogWarning($"[KizShop] Catalog asset validation encountered error: {ex.Message}");
             }
+        }
+
+        public static string GetBuildIdentification(int mainThreadId)
+        {
+            var asm = typeof(KizShopPlugin).Assembly;
+            var infoVer = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                          ?? asm.GetName().Version?.ToString();
+
+            DateTime buildTime;
+            try
+            {
+                string loc = asm.Location;
+                buildTime = !string.IsNullOrEmpty(loc) && File.Exists(loc)
+                    ? File.GetLastWriteTimeUtc(loc)
+                    : DateTime.UtcNow;
+            }
+            catch
+            {
+                buildTime = DateTime.UtcNow;
+            }
+
+            return $"[KizShop] Loaded v{infoVer} (build {buildTime:yyyy-MM-dd HH:mm:ss} UTC), main thread id {mainThreadId}";
         }
 
         public string FormatMoney(Money amount)

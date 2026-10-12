@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Deferred catalog asset validation to `Level.onPostLevelLoaded` (or immediately if already loaded) on the main thread.
   - Validation preserves configured entry names and does not mutate `Enabled`. Added non-serialized `Available` property to `ItemShopEntry`, marking missing game assets unavailable for resolution and listing.
   - Catalog validation re-runs automatically on `ReloadPlugin()` and `/kizshop reload`.
+- **Build Identification**:
+  - Logged informational version, DLL build timestamp (UTC), and main thread ID on plugin load.
+  - Added `/kizshop version` (and default `/kizshop` output) admin command printing build identification in chat.
+- **Auto-Equip Prevention on Delivery**:
+  - Added `AutoEquipPurchasedItems` configuration option (default `false`). When `false`, delivers items with `tryAddItem(item, false)`, preventing weapons, useables, and clothing from auto-equipping into player hands.
 
 ## [0.2.3] - 2026-10-12
 

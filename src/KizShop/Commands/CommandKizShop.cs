@@ -15,7 +15,7 @@ namespace KizShop.Commands
         public AllowedCaller AllowedCaller => AllowedCaller.Both;
         public string Name => "kizshop";
         public string Help => "Admin command to manage KizShop.";
-        public string Syntax => "<reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>";
+        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>";
         public List<string> Aliases => new List<string> { "ks" };
         public List<string> Permissions => new List<string> { "kizshop.admin" };
 
@@ -24,11 +24,16 @@ namespace KizShop.Commands
             CommandRunner.Run(caller, async () =>
             {
                 var plugin = KizShopPlugin.Instance;
+                int mainThreadId = (plugin.Dispatcher as RocketMainThreadDispatcher)?.MainThreadId ?? System.Threading.Thread.CurrentThread.ManagedThreadId;
+                string buildInfo = KizShopPlugin.GetBuildIdentification(mainThreadId);
 
                 if (command.Length < 1)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        KizChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow));
+                    {
+                        KizChat.Say(caller, buildInfo, UnityEngine.Color.cyan);
+                        KizChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow);
+                    });
                     return;
                 }
 
@@ -38,6 +43,11 @@ namespace KizShop.Commands
 
                 switch (action)
                 {
+                    case "version":
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            KizChat.Say(caller, buildInfo, UnityEngine.Color.cyan));
+                        break;
+
                     case "reload":
                         plugin.ReloadPlugin();
                         plugin.Dispatcher.QueueOnMainThread(() =>

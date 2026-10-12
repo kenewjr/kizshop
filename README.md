@@ -60,7 +60,8 @@
 | `/shop [page]` | `/items` | View paginated catalog of available items | `kizshop.shop` |
 | `/buyvehicle <name\|id\|guid>` | `/buyv`, `/vehicle` | Buy and safely spawn a vehicle | `kizshop.vehicle` |
 | `/eco <give\|take\|set> <player> <amount>` | `/economy` | Admin: adjust player balances | `kizshop.eco`, `kizshop.admin` |
-| `/kizshop reload` | `/ks` | Admin: reload config & shop catalog | `kizshop.admin` |
+| `/kizshop [version]` | `/ks` | Admin: print build version or admin menu | `kizshop.admin` |
+| `/kizshop reload` | | Admin: reload config & shop catalog | `kizshop.admin` |
 | `/kizshop additem <id> <name> <buy> [sell] [perm]` | | Admin: add or update an item entry | `kizshop.admin` |
 | `/kizshop removeitem <id>` | | Admin: remove an item from shop | `kizshop.admin` |
 | `/kizshop setitemprice <id> <buy> [sell]` | | Admin: update prices for an item | `kizshop.admin` |
@@ -120,6 +121,7 @@
   <ScaleSellByQuality>true</ScaleSellByQuality>
   <AllowSellAboveBuy>false</AllowSellAboveBuy>
   <GunPurchaseIncludesMagazine>false</GunPurchaseIncludesMagazine>
+  <AutoEquipPurchasedItems>false</AutoEquipPurchasedItems>
   <ShopItemsPerPage>8</ShopItemsPerPage>
 
   <!-- Discord Webhook Integration -->

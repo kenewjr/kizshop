@@ -21,6 +21,7 @@ namespace KizShop
         public bool ScaleSellByQuality { get; set; } = true;
         public bool AllowSellAboveBuy { get; set; } = false;
         public bool GunPurchaseIncludesMagazine { get; set; } = false;
+        public bool AutoEquipPurchasedItems { get; set; } = false;
 
         // Kill rewards
         public bool PlayerKillRewardEnabled { get; set; } = true;
@@ -72,6 +73,7 @@ namespace KizShop
             ScaleSellByQuality = true;
             AllowSellAboveBuy = false;
             GunPurchaseIncludesMagazine = false;
+            AutoEquipPurchasedItems = false;
 
             PlayerKillRewardEnabled = true;
             PlayerKillRewardAmount = 50.00m;

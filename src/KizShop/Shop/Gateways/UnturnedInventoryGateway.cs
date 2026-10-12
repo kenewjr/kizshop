@@ -399,7 +399,7 @@ namespace KizShop.Shop.Gateways
             }
         }
 
-        public async Task<bool> TryAddItemAsync(ulong steamId, Item item)
+        public async Task<bool> TryAddItemAsync(ulong steamId, Item item, bool autoEquip = false)
         {
             return await _dispatcher.RunOnMainThreadAsync(() =>
             {
@@ -407,7 +407,7 @@ namespace KizShop.Shop.Gateways
                 var player = GetPlayer(steamId);
                 if (player == null || player.Inventory == null || item == null) return false;
 
-                return player.Inventory.tryAddItem(item, true);
+                return player.Inventory.tryAddItem(item, autoEquip);
             }).ConfigureAwait(false);
         }
 
