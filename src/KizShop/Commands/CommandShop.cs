@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Rocket.API;
-using Rocket.Unturned.Chat;
 using KizShop.Common;
 
 namespace KizShop.Commands
@@ -20,24 +19,6 @@ namespace KizShop.Commands
             CommandRunner.Run(caller, async () =>
             {
                 var plugin = KizShopPlugin.Instance;
-
-                bool uiAttempted = false;
-                if (command.Length == 0 &&
-                    caller is Rocket.Unturned.Player.UnturnedPlayer uPlayer &&
-                    plugin.Configuration.Instance.UseVisualUiForShopCommand &&
-                    plugin.Configuration.Instance.EnableVisualUI &&
-                    plugin.ShopUi != null)
-                {
-                    uiAttempted = true;
-                    bool opened = await plugin.ShopUi.OpenShopAsync(uPlayer.CSteamID.m_SteamID).ConfigureAwait(false);
-                    if (opened) return;
-                }
-
-                if (uiAttempted)
-                {
-                    plugin.Dispatcher.QueueOnMainThread(() =>
-                        KizChat.Say(caller, plugin.Translate("shop_ui_unavailable"), UnityEngine.Color.yellow));
-                }
 
                 int page = 1;
                 if (command.Length >= 1)

@@ -102,46 +102,67 @@ namespace KizShop.Shop.Gateways
             }).ConfigureAwait(false);
         }
 
+        public Func<ushort, byte[]> DefaultGunStateResolver { get; set; }
+        public Func<ushort, bool> IsGunChecker { get; set; }
+
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(ushort id, bool incMag), byte[]> _defaultGunStates =
+            new System.Collections.Concurrent.ConcurrentDictionary<(ushort, bool), byte[]>();
+
+        public byte[] GetDefaultGunState(ushort itemId)
+        {
+            if (DefaultGunStateResolver != null)
+            {
+                return DefaultGunStateResolver(itemId);
+            }
+
+            var asset = Assets.find(EAssetType.ITEM, itemId) as ItemGunAsset;
+            if (asset == null) return null;
+
+            bool includeMag = _configProvider().GunPurchaseIncludesMagazine;
+            return _defaultGunStates.GetOrAdd((itemId, includeMag), _ =>
+            {
+                var tempItem = new Item(itemId, true);
+                byte[] state = tempItem.state != null ? (byte[])tempItem.state.Clone() : new byte[16];
+                if (!includeMag)
+                {
+                    if (state.Length > 9)
+                    {
+                        state[8] = 0;
+                        state[9] = 0;
+                    }
+                    if (state.Length > 10)
+                    {
+                        state[10] = 0;
+                    }
+                }
+                return state;
+            });
+        }
+
         public async Task<bool> HasAttachmentsOrLoadedMagazineAsync(ushort itemId, byte[] state)
         {
             return await _dispatcher.RunOnMainThreadAsync(() =>
             {
                 DebugAssertMainThread(nameof(HasAttachmentsOrLoadedMagazineAsync));
-                var asset = Assets.find(EAssetType.ITEM, itemId) as ItemGunAsset;
-                if (asset == null || state == null || state.Length < 10) return false;
-
-                ushort sight = BitConverter.ToUInt16(state, 0);
-                ushort tactical = BitConverter.ToUInt16(state, 2);
-                ushort grip = BitConverter.ToUInt16(state, 4);
-                ushort barrel = BitConverter.ToUInt16(state, 6);
-                ushort magazine = BitConverter.ToUInt16(state, 8);
-
-                if (sight != 0 && sight != asset.sightID) return true;
-                if (tactical != 0 && tactical != asset.tacticalID) return true;
-                if (grip != 0 && grip != asset.gripID) return true;
-                if (barrel != 0 && barrel != asset.barrelID) return true;
-                if (magazine != 0) return true;
-
-                return false;
+                return HasAttachmentsOrLoadedMagazine(itemId, state);
             }).ConfigureAwait(false);
         }
 
         public bool HasAttachmentsOrLoadedMagazine(ushort itemId, byte[] state)
         {
-            var asset = Assets.find(EAssetType.ITEM, itemId) as ItemGunAsset;
-            if (asset == null || state == null || state.Length < 10) return false;
+            bool isGun = IsGunChecker != null ? IsGunChecker(itemId) : (Assets.find(EAssetType.ITEM, itemId) is ItemGunAsset);
+            if (!isGun || state == null || state.Length < 10) return false;
 
-            ushort sight = BitConverter.ToUInt16(state, 0);
-            ushort tactical = BitConverter.ToUInt16(state, 2);
-            ushort grip = BitConverter.ToUInt16(state, 4);
-            ushort barrel = BitConverter.ToUInt16(state, 6);
-            ushort magazine = BitConverter.ToUInt16(state, 8);
+            byte[] defState = GetDefaultGunState(itemId);
+            if (defState == null || defState.Length < 10) return false;
 
-            if (sight != 0 && sight != asset.sightID) return true;
-            if (tactical != 0 && tactical != asset.tacticalID) return true;
-            if (grip != 0 && grip != asset.gripID) return true;
-            if (barrel != 0 && barrel != asset.barrelID) return true;
-            if (magazine != 0) return true;
+            for (int i = 0; i < 10; i++)
+            {
+                if (state[i] != defState[i])
+                {
+                    return true;
+                }
+            }
 
             return false;
         }
@@ -166,7 +187,21 @@ namespace KizShop.Shop.Gateways
             return await _dispatcher.RunOnMainThreadAsync(() =>
             {
                 DebugAssertMainThread(nameof(CreateItemAsync));
-                return new Item(itemId, true);
+                var item = new Item(itemId, true);
+                bool isGun = IsGunChecker != null ? IsGunChecker(itemId) : (Assets.find(EAssetType.ITEM, itemId) is ItemGunAsset);
+                if (isGun && !_configProvider().GunPurchaseIncludesMagazine && item.state != null)
+                {
+                    if (item.state.Length > 9)
+                    {
+                        item.state[8] = 0;
+                        item.state[9] = 0;
+                    }
+                    if (item.state.Length > 10)
+                    {
+                        item.state[10] = 0;
+                    }
+                }
+                return item;
             }).ConfigureAwait(false);
         }
 

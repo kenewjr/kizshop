@@ -98,30 +98,9 @@ Manual verification checklist for a local Windows Unturned dedicated server runn
 
 ---
 
-## 9. In-Game Visual UI Verification
-- [ ] Ensure `EnableVisualUI` is set to `true` in config (Effect ID default `32001`).
-- [ ] In game, run `/shopui` (or `/sui`, `/vshop`).
-  - **Expected**:
-    - The shop UI overlay appears on the client screen with unlocked mouse cursor (modal flag active).
-    - Player balance, page number, and tabs are rendered accurately.
-- [ ] Click `KizShop_Tab_Vehicles`.
-  - **Expected**: Catalog switches to show available vehicles.
-- [ ] Click `KizShop_Tab_Items`.
-  - **Expected**: Catalog switches back to items list.
-- [ ] Click `KizShop_Qty_5` and `KizShop_Qty_10`.
-  - **Expected**: Quantity indicator updates to 5 and 10.
-- [ ] Click `KizShop_Buy_0`.
-  - **Expected**: The item in slot 0 is purchased with the selected quantity, inventory receives items, balance updates in real time.
-- [ ] Click `KizShop_Close`.
-  - **Expected**: UI closes and player resumes normal game input.
-- [ ] If `UseVisualUiForShopCommand` is enabled, type `/shop` without arguments.
-  - **Expected**: The visual UI opens instead of printing chat text.
-
----
-
-## 10. Discord Bot & Webhooks Verification
+## 9. Discord Bot & Webhooks Verification
 - [ ] Configure `DiscordWebhookEnabled` to `true` with a valid test webhook URL.
-- [ ] Purchase an item in-game via `/buy` or Visual UI.
+- [ ] Purchase an item in-game via `/buy`.
   - **Expected**: A rich green embed appears in Discord channel showing buyer SteamID, item name, cost, and remaining balance.
 - [ ] Sell an item in-game via `/sell`.
   - **Expected**: A blue embed appears in Discord showing seller SteamID, payout amount, and new balance.
@@ -140,4 +119,5 @@ Manual verification checklist for a local Windows Unturned dedicated server runn
   - **Expected**: Bot refuses action with permission denied message.
 - [ ] As an authorized Discord admin, run `!ks eco give <SteamID64> 50`.
   - **Expected**: Target balance is updated on the server and bot confirms new balance.
+
 

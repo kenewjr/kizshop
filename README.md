@@ -14,7 +14,7 @@
   - Per-player accounts keyed by SteamID64 with schema version tracking.
   - Configurable starting balance, currency name, symbol, max transaction limit, and optional max balance limit.
   - Optional income sources: Player kill rewards (with cooldown, suicide prevention, and group member prevention), zombie kill rewards, mega zombie kill rewards, and periodic playtime income.
-- **Exploit-Safe Item & Vehicle Shop**:
+- **Exploit-Safe Item & Vehicle Shop (Chat-Only)**:
   - Support lookup by **numeric ID**, **GUID**, and **case-insensitive partial name match** (exact > prefix > contains). Quoted arguments supported for names with spaces.
   - **Transaction ordering & rollback rules**:
     - **Buying**: checks space simulation -> acquires per-player lock -> atomically withdraws total price at storage level -> delivers one instance at a time with `tryAddItem(item, true)` tracking references. On failure or exception: removes tracked items by reference, issues a full refund deposit (ignoring `MaxBalance`), and cancels the entire purchase.
@@ -58,7 +58,6 @@
 | `/sell <item> [amount\|all]` | | Sell items from inventory to shop | `kizshop.sell` |
 | `/cost <item\|vehicle>` | `/price` | Check buy and sell prices | `kizshop.cost` |
 | `/shop [page]` | `/items` | View paginated catalog of available items | `kizshop.shop` |
-| `/shopui` | `/sui`, `/vshop` | Open the interactive in-game visual UI | `kizshop.shop`, `kizshop.shopui` |
 | `/buyvehicle <name\|id\|guid>` | `/buyv`, `/vehicle` | Buy and safely spawn a vehicle | `kizshop.vehicle` |
 | `/eco <give\|take\|set> <player> <amount>` | `/economy` | Admin: adjust player balances | `kizshop.eco`, `kizshop.admin` |
 | `/kizshop reload` | `/ks` | Admin: reload config & shop catalog | `kizshop.admin` |
@@ -95,7 +94,7 @@
   <CurrencySymbol>$</CurrencySymbol>
   <StartingBalance>100.00</StartingBalance>
   <MaxBalance>0.00</MaxBalance>
-  <MaxTransactionAmount>1000000.00</MaxTransactionAmount>
+  <MaxTransactionAmount>10000000.00</MaxTransactionAmount>
   <BaltopCount>10</BaltopCount>
   
   <!-- Transaction Log Pruning (days to keep, 0 = keep forever) -->
@@ -120,14 +119,8 @@
   <MaxVehiclesPerPlayer>2</MaxVehiclesPerPlayer>
   <ScaleSellByQuality>true</ScaleSellByQuality>
   <AllowSellAboveBuy>false</AllowSellAboveBuy>
+  <GunPurchaseIncludesMagazine>false</GunPurchaseIncludesMagazine>
   <ShopItemsPerPage>8</ShopItemsPerPage>
-
-  <!-- In-Game Visual UI Settings -->
-  <EnableVisualUI>true</EnableVisualUI>
-  <UIEffectId>32001</UIEffectId>
-  <UIKey>32001</UIKey>
-  <UseVisualUiForShopCommand>false</UseVisualUiForShopCommand>
-  <UIItemsPerPage>6</UIItemsPerPage>
 
   <!-- Discord Webhook Integration -->
   <DiscordWebhookEnabled>false</DiscordWebhookEnabled>

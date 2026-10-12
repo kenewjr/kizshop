@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-12
+
+### Removed
+- **In-Game Visual UI Purged**: The shop is strictly chat-only (`/shop`, `/buy`, `/sell`, `/cost`, `/buyvehicle`). Deleted `ShopUiService`, `UnturnedShopUiGateway`, `IShopUiGateway`, `CommandShopUi` (`/shopui`, `/sui`, `/vshop`), and `docs/VISUAL_UI.md`.
+- Removed UI configuration options (`EnableVisualUI`, `UIEffectId`, `UIKey`, `UseVisualUiForShopCommand`, `UIItemsPerPage`). Old configuration files containing these XML elements continue to deserialize seamlessly without errors.
+- Removed `shop_ui_unavailable` translation and `kizshop.shopui` permission.
+
+### Fixed
+- **Configuration Default Drift**: Synchronized property initializers and `LoadDefaults()` for all public properties with automated reflection validation.
+- **Gun Sell & Buy Semantics**:
+  - Replaced crude `magazine != 0` check with byte 0..9 comparison against game asset default state, allowing freshly purchased guns to be sold back.
+  - Added `GunPurchaseIncludesMagazine` configuration option (default `false`). When `false`, stripped magazine (bytes 8..9) and ammo (byte 10) on delivery and during default state comparison.
+- **Off-Thread Database I/O**:
+  - Wrapped all public methods in `LiteDbStorage` and `SqliteStorage` with `await Task.Run(...).ConfigureAwait(false)`, ensuring database I/O never executes synchronously on the main thread.
+- **Catalog Validation Timing**:
+  - Deferred catalog asset validation to `Level.onPostLevelLoaded` (or immediately if already loaded) on the main thread.
+  - Validation preserves configured entry names and does not mutate `Enabled`. Added non-serialized `Available` property to `ItemShopEntry`, marking missing game assets unavailable for resolution and listing.
+  - Catalog validation re-runs automatically on `ReloadPlugin()` and `/kizshop reload`.
+
 ## [0.2.3] - 2026-10-12
 
 ### Fixed

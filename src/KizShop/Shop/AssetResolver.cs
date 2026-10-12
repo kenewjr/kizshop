@@ -14,7 +14,7 @@ namespace KizShop.Shop
                 return LookupResult<ItemShopEntry>.NotFound();
             }
 
-            var pool = enabledOnly ? entries.Where(e => e.Enabled).ToList() : entries.ToList();
+            var pool = enabledOnly ? entries.Where(e => e.Enabled && e.Available).ToList() : entries.ToList();
             query = query.Trim();
 
             // 1. Numeric ID

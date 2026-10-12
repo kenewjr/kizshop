@@ -17,9 +17,10 @@ namespace KizShop
         public int BaltopCount { get; set; } = 10;
         public int LogRetentionDays { get; set; } = 30;
 
-        // Pricing rules
+        // Pricing & item rules
         public bool ScaleSellByQuality { get; set; } = true;
         public bool AllowSellAboveBuy { get; set; } = false;
+        public bool GunPurchaseIncludesMagazine { get; set; } = false;
 
         // Kill rewards
         public bool PlayerKillRewardEnabled { get; set; } = true;
@@ -39,13 +40,6 @@ namespace KizShop
         public int VehicleCooldownSeconds { get; set; } = 30;
         public int MaxVehiclesPerPlayer { get; set; } = 2;
         public int ShopItemsPerPage { get; set; } = 8;
-
-        // Visual UI settings
-        public bool EnableVisualUI { get; set; } = false;
-        public ushort UIEffectId { get; set; } = 32001;
-        public short UIKey { get; set; } = 32001;
-        public bool UseVisualUiForShopCommand { get; set; } = true;
-        public int UIItemsPerPage { get; set; } = 6;
 
         // Inventory logging
         public bool VerboseInventoryLogging { get; set; } = false;
@@ -77,6 +71,7 @@ namespace KizShop
 
             ScaleSellByQuality = true;
             AllowSellAboveBuy = false;
+            GunPurchaseIncludesMagazine = false;
 
             PlayerKillRewardEnabled = true;
             PlayerKillRewardAmount = 50.00m;
@@ -94,11 +89,7 @@ namespace KizShop
             MaxVehiclesPerPlayer = 2;
             ShopItemsPerPage = 8;
 
-            EnableVisualUI = true;
-            UIEffectId = 32001;
-            UIKey = 32001;
-            UseVisualUiForShopCommand = true;
-            UIItemsPerPage = 6;
+            VerboseInventoryLogging = false;
 
             DiscordWebhookEnabled = false;
             DiscordWebhookUrl = "";

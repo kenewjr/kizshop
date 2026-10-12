@@ -13,7 +13,6 @@ using KizShop.Shop.Gateways;
 using KizShop.Shop.Models;
 using KizShop.Storage;
 using KizShop.Tests.Mocks;
-using KizShop.UI;
 
 namespace KizShop.Tests
 {
@@ -27,7 +26,6 @@ namespace KizShop.Tests
         private readonly MockVehicleGateway _vehicle;
         private readonly KizShopConfiguration _config;
         private readonly ShopTransactionService _transactionService;
-        private readonly MockShopUiGateway _uiGateway;
 
         public Addendum3Tests()
         {
@@ -46,15 +44,10 @@ namespace KizShop.Tests
             _vehicle = new MockVehicleGateway();
             _config = new KizShopConfiguration
             {
-                EnableVisualUI = true,
-                UIEffectId = 32001,
-                UIKey = 32001,
-                UIItemsPerPage = 6,
                 ScaleSellByQuality = true
             };
 
             _transactionService = new ShopTransactionService(_shopService, _economy, _inventory, _vehicle, () => _config);
-            _uiGateway = new MockShopUiGateway();
         }
 
         public void Dispose()
@@ -198,51 +191,6 @@ namespace KizShop.Tests
             });
 
             Assert.Equal("Main thread failed", ex.Message);
-        }
-
-        // 3. UI tests
-        [Fact]
-        public async Task ShopUi_SlotBuyClick_SendsResultMessage()
-        {
-            ulong steamId = 76561198000000088;
-            await _economy.SetBalanceAsync(steamId, Money.FromDecimal(500m), "Initial");
-
-            string receivedMessage = null;
-            var uiService = new ShopUiService(
-                _shopService,
-                _economy,
-                _transactionService,
-                _uiGateway,
-                () => _config,
-                feedbackSender: (sId, msg, color) =>
-                {
-                    if (sId == steamId) receivedMessage = msg;
-                });
-
-            await uiService.OpenShopAsync(steamId);
-            Assert.True(uiService.IsUiOpen(steamId));
-
-            // Slot 0 is Medkit (40m)
-            await uiService.HandleButtonClickedAsync(steamId, "KizShop_Buy_0", _ => true, false);
-
-            Assert.NotNull(receivedMessage);
-            Assert.Contains("Medkit", receivedMessage);
-            Assert.Single(_inventory.DeliveredItems);
-        }
-
-        [Fact]
-        public async Task ShopUi_Disconnect_RemovesPlayerState()
-        {
-            ulong steamId = 76561198000000089;
-            var uiService = new ShopUiService(_shopService, _economy, _transactionService, _uiGateway, () => _config);
-
-            await uiService.OpenShopAsync(steamId);
-            Assert.True(uiService.IsUiOpen(steamId));
-
-            // Disconnect triggers CloseShop
-            uiService.CloseShop(steamId);
-            Assert.False(uiService.IsUiOpen(steamId));
-            Assert.Single(_uiGateway.CloseCalls);
         }
 
         // 4. Buy flow rollback test

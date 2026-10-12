@@ -67,6 +67,10 @@ namespace KizShop.Tests.Mocks
         public List<Item> RemovedByReferenceItems { get; } = new List<Item>();
         public HashSet<ushort> GunItemsWithAttachments { get; } = new HashSet<ushort>();
         public Dictionary<ushort, byte> DefaultAmounts { get; } = new Dictionary<ushort, byte>();
+        public HashSet<ushort> GunItemIds { get; } = new HashSet<ushort>();
+        public Dictionary<ushort, byte[]> DefaultGunStates { get; } = new Dictionary<ushort, byte[]>();
+        public Func<KizShopConfiguration> ConfigProvider { get; set; }
+        public bool AutoAddToGearOnDelivery { get; set; } = false;
 
         public Task<List<InventoryItemInstance>> GetGearItemsAsync(ulong steamId, ushort itemId)
         {
@@ -75,6 +79,35 @@ namespace KizShop.Tests.Mocks
 
         public Task<bool> HasAttachmentsOrLoadedMagazineAsync(ushort itemId, byte[] state)
         {
+            if (GunItemIds.Contains(itemId) || DefaultGunStates.ContainsKey(itemId))
+            {
+                if (state == null || state.Length < 10) return Task.FromResult(false);
+
+                byte[] defState = DefaultGunStates.TryGetValue(itemId, out var ds) ? (byte[])ds.Clone() : new byte[16];
+                bool incMag = ConfigProvider?.Invoke()?.GunPurchaseIncludesMagazine ?? false;
+                if (!incMag)
+                {
+                    if (defState.Length > 9)
+                    {
+                        defState[8] = 0;
+                        defState[9] = 0;
+                    }
+                    if (defState.Length > 10)
+                    {
+                        defState[10] = 0;
+                    }
+                }
+
+                for (int i = 0; i < 10; i++)
+                {
+                    if (state[i] != defState[i])
+                    {
+                        return Task.FromResult(true);
+                    }
+                }
+                return Task.FromResult(false);
+            }
+
             return Task.FromResult(GunItemsWithAttachments.Contains(itemId));
         }
 
@@ -95,7 +128,30 @@ namespace KizShop.Tests.Mocks
         public Task<Item> CreateItemAsync(ushort itemId)
         {
             byte defaultAmount = DefaultAmounts.TryGetValue(itemId, out var amt) ? amt : (byte)1;
-            return Task.FromResult(new Item(itemId, defaultAmount, 100, new byte[16]));
+            byte[] state = new byte[16];
+            if (DefaultGunStates.TryGetValue(itemId, out var defState))
+            {
+                state = (byte[])defState.Clone();
+            }
+
+            if (GunItemIds.Contains(itemId) || DefaultGunStates.ContainsKey(itemId))
+            {
+                bool incMag = ConfigProvider?.Invoke()?.GunPurchaseIncludesMagazine ?? false;
+                if (!incMag)
+                {
+                    if (state.Length > 9)
+                    {
+                        state[8] = 0;
+                        state[9] = 0;
+                    }
+                    if (state.Length > 10)
+                    {
+                        state[10] = 0;
+                    }
+                }
+            }
+
+            return Task.FromResult(new Item(itemId, defaultAmount, 100, state));
         }
 
         public Task<bool> TryAddItemAsync(ulong steamId, Item item)
@@ -104,6 +160,15 @@ namespace KizShop.Tests.Mocks
             if (DeliveredItems.Count >= MaxDeliveryCountBeforeFailure) return Task.FromResult(false);
 
             DeliveredItems.Add(item);
+            if (AutoAddToGearOnDelivery)
+            {
+                GearItems.Add(new InventoryItemInstance
+                {
+                    Page = PlayerInventory.BACKPACK,
+                    Index = (byte)GearItems.Count,
+                    Item = item
+                });
+            }
             return Task.FromResult(true);
         }
 

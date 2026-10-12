@@ -19,7 +19,6 @@ using KizShop.Economy;
 using KizShop.Shop;
 using KizShop.Shop.Gateways;
 using KizShop.Storage;
-using KizShop.UI;
 
 namespace KizShop
 {
@@ -31,7 +30,6 @@ namespace KizShop
         public EconomyService Economy { get; private set; }
         public ShopService Shop { get; private set; }
         public ShopTransactionService Transactions { get; private set; }
-        public ShopUiService ShopUi { get; private set; }
         public DiscordWebhookService DiscordWebhook { get; private set; }
         public DiscordBotService DiscordBot { get; private set; }
         public IMainThreadDispatcher Dispatcher { get; private set; } = new RocketMainThreadDispatcher();
@@ -85,7 +83,6 @@ namespace KizShop
             { "buy_no_space", "<color=red>Not enough inventory space to receive {0}x {1}.</color>" },
             { "buy_player_unavailable", "<color=red>Player unavailable.</color>" },
             { "buy_item_unknown", "<color=red>Item asset ID {0} does not exist on server.</color>" },
-            { "shop_ui_unavailable", "<color=yellow>Visual UI is unavailable. Using chat catalog.</color>" },
             { "buy_success", "<color=green>Bought {0}x {1} for {2}. Remaining balance: {3}.</color>" },
             { "buy_failed_refunded", "<color=red>Item delivery failed. Your purchase was canceled and refunded in full.</color>" },
 
@@ -190,7 +187,6 @@ namespace KizShop
                 // 3. Initialize Shop Service & Transactions
                 Shop = new ShopService(Directory, () => Configuration.Instance.AllowSellAboveBuy);
                 Shop.Load();
-                ValidateCatalogOnLoad();
 
                 Transactions = new ShopTransactionService(
                     Shop,
@@ -199,12 +195,7 @@ namespace KizShop
                     new UnturnedVehicleGateway(),
                     () => Configuration.Instance);
 
-                // 4. Initialize Visual UI
-                var uiGateway = new UnturnedShopUiGateway();
-                ShopUi = new ShopUiService(Shop, Economy, Transactions, uiGateway, () => Configuration.Instance);
-                EffectManager.onEffectButtonClicked += OnEffectButtonClicked;
-
-                // 5. Initialize Discord Services & Webhooks
+                // 4. Initialize Discord Services & Webhooks
                 DiscordWebhook = new DiscordWebhookService(() => Configuration.Instance);
                 DiscordBot = new DiscordBotService(Economy, Storage, () => Configuration.Instance);
                 DiscordBot.Start();
@@ -237,12 +228,17 @@ namespace KizShop
                     }
                 };
 
-                // 6. Hook Game Events
+                // 5. Hook Game Events
                 UnturnedPlayerEvents.OnPlayerDeath += HandlePlayerDeath;
                 UnturnedPlayerEvents.OnPlayerUpdateStat += HandlePlayerStat;
-                Rocket.Unturned.U.Events.OnPlayerDisconnected += HandlePlayerDisconnected;
+                Level.onPostLevelLoaded += HandlePostLevelLoaded;
 
-                // 7. Start Playtime Income Loop
+                if (Level.isLoaded)
+                {
+                    Dispatcher.QueueOnMainThread(ValidateCatalog);
+                }
+
+                // 6. Start Playtime Income Loop
                 StartPlaytimeLoop();
 
                 Logger.Log("[KizShop] Plugin loaded successfully.");
@@ -256,16 +252,13 @@ namespace KizShop
 
         protected override void Unload()
         {
-            EffectManager.onEffectButtonClicked -= OnEffectButtonClicked;
-            Rocket.Unturned.U.Events.OnPlayerDisconnected -= HandlePlayerDisconnected;
+            Level.onPostLevelLoaded -= HandlePostLevelLoaded;
 
             StopPlaytimeLoop();
             StopLogPruneLoop();
 
             UnturnedPlayerEvents.OnPlayerDeath -= HandlePlayerDeath;
             UnturnedPlayerEvents.OnPlayerUpdateStat -= HandlePlayerStat;
-
-            ShopUi?.ClearAllStates();
 
             if (DiscordBot != null)
             {
@@ -278,8 +271,6 @@ namespace KizShop
                 DiscordWebhook.Dispose();
                 DiscordWebhook = null;
             }
-
-            ShopUi = null;
 
             if (Economy != null)
             {
@@ -304,6 +295,7 @@ namespace KizShop
         {
             base.ReloadPlugin();
             Shop?.Load();
+            Dispatcher.QueueOnMainThread(ValidateCatalog);
             StopPlaytimeLoop();
             StartPlaytimeLoop();
             StopLogPruneLoop();
@@ -313,57 +305,29 @@ namespace KizShop
             DiscordBot?.Start();
         }
 
-        private void OnEffectButtonClicked(Player player, string buttonName)
+        private void HandlePostLevelLoaded(int level)
         {
-            if (player == null || ShopUi == null) return;
-            var steamId = player.channel.owner.playerID.steamID.m_SteamID;
-            var uPlayer = UnturnedPlayer.FromCSteamID(player.channel.owner.playerID.steamID);
-            bool isAdmin = player.channel.owner.isAdmin;
-
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await ShopUi.HandleButtonClickedAsync(
-                        steamId,
-                        buttonName,
-                        perm => uPlayer != null && uPlayer.HasPermission(perm),
-                        isAdmin).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    KizLog.Error($"[KizShop] Error in OnEffectButtonClicked for {steamId}: {ex}");
-                }
-            });
+            Dispatcher.QueueOnMainThread(ValidateCatalog);
         }
 
-        private void HandlePlayerDisconnected(UnturnedPlayer player)
-        {
-            if (player != null)
-            {
-                ShopUi?.CloseShop(player.CSteamID.m_SteamID);
-            }
-        }
-
-        private void ValidateCatalogOnLoad()
+        public void ValidateCatalog()
         {
             try
             {
-                var items = Shop.GetItems();
+                var items = Shop?.GetItems();
+                if (items == null) return;
+
                 foreach (var item in items)
                 {
                     var asset = Assets.find(EAssetType.ITEM, item.Id) as ItemAsset;
                     if (asset == null)
                     {
                         Logger.LogWarning($"[KizShop] Catalog item ID {item.Id} ('{item.Name}') not found in game assets! Marking unavailable.");
-                        item.Enabled = false;
+                        item.Available = false;
                     }
                     else
                     {
-                        if (!string.IsNullOrEmpty(asset.itemName))
-                        {
-                            item.Name = asset.itemName;
-                        }
+                        item.Available = true;
                         Logger.Log($"[KizShop] Catalog item ID {item.Id}: assetName='{asset.itemName}', size={asset.size_x}x{asset.size_y}");
                     }
                 }

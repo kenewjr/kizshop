@@ -1,9 +1,7 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using LiteDB;
 using KizShop.Common;
@@ -14,9 +12,8 @@ namespace KizShop.Storage
     {
         private readonly string _dbPath;
         private readonly IClock _clock;
+        private readonly object _dbLock = new object();
         private LiteDatabase _db;
-        private readonly BlockingCollection<Action> _queue = new BlockingCollection<Action>();
-        private readonly Thread _workerThread;
         private bool _disposed;
 
         public class AccountDoc
@@ -54,92 +51,30 @@ namespace KizShop.Storage
             {
                 Directory.CreateDirectory(dir);
             }
-
-            _workerThread = new Thread(ProcessQueue)
-            {
-                IsBackground = true,
-                Name = "KizShop-LiteDB"
-            };
-            _workerThread.Start();
         }
 
-        private void ProcessQueue()
+        public async Task InitializeAsync()
         {
-            foreach (var action in _queue.GetConsumingEnumerable())
+            await Task.Run(() =>
             {
-                try
+                lock (_dbLock)
                 {
-                    action();
+                    _db = new LiteDatabase(_dbPath);
+                    var versions = _db.GetCollection<SchemaVersionDoc>("schema_version");
+                    if (versions.Count() == 0)
+                    {
+                        versions.Insert(new SchemaVersionDoc { Version = 2, AppliedAt = _clock.UtcNow });
+                    }
+
+                    var accounts = _db.GetCollection<AccountDoc>("accounts");
+                    accounts.EnsureIndex(x => x.SteamId, true);
+
+                    var txs = _db.GetCollection<TransactionDoc>("transactions");
+                    txs.EnsureIndex(x => x.SteamId);
+                    txs.EnsureIndex(x => x.Timestamp);
                 }
-                catch { }
-            }
+            }).ConfigureAwait(false);
         }
-
-        private Task<T> EnqueueAsync<T>(Func<T> func)
-        {
-            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-            try
-            {
-                _queue.Add(() =>
-                {
-                    try
-                    {
-                        tcs.SetResult(func());
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.SetException(ex);
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-            return tcs.Task;
-        }
-
-        private Task EnqueueAsync(Action action)
-        {
-            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            try
-            {
-                _queue.Add(() =>
-                {
-                    try
-                    {
-                        action();
-                        tcs.SetResult(true);
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.SetException(ex);
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-            return tcs.Task;
-        }
-
-        public Task InitializeAsync() => EnqueueAsync(() =>
-        {
-            _db = new LiteDatabase(_dbPath);
-            var versions = _db.GetCollection<SchemaVersionDoc>("schema_version");
-            if (versions.Count() == 0)
-            {
-                versions.Insert(new SchemaVersionDoc { Version = 2, AppliedAt = _clock.UtcNow });
-            }
-
-            var accounts = _db.GetCollection<AccountDoc>("accounts");
-            accounts.EnsureIndex(x => x.SteamId, true);
-
-            var txs = _db.GetCollection<TransactionDoc>("transactions");
-            txs.EnsureIndex(x => x.SteamId);
-            txs.EnsureIndex(x => x.Timestamp);
-        });
 
         private AccountDoc FindAccount(long steamId)
         {
@@ -147,192 +82,247 @@ namespace KizShop.Storage
             return accounts.Find(Query.EQ("_id", steamId), limit: 1).ToList().FirstOrDefault();
         }
 
-        public Task<bool> AccountExistsAsync(ulong steamId) => EnqueueAsync(() =>
+        public async Task<bool> AccountExistsAsync(ulong steamId)
         {
-            return FindAccount((long)steamId) != null;
-        });
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    return FindAccount((long)steamId) != null;
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task<Money> GetBalanceAsync(ulong steamId, Money defaultStartingBalance) => EnqueueAsync(() =>
+        public async Task<Money> GetBalanceAsync(ulong steamId, Money defaultStartingBalance)
         {
-            var accounts = _db.GetCollection<AccountDoc>("accounts");
-            var doc = FindAccount((long)steamId);
-            if (doc != null)
+            return await Task.Run(() =>
             {
-                return Money.FromCents(doc.BalanceCents);
-            }
+                lock (_dbLock)
+                {
+                    var accounts = _db.GetCollection<AccountDoc>("accounts");
+                    var doc = FindAccount((long)steamId);
+                    if (doc != null)
+                    {
+                        return Money.FromCents(doc.BalanceCents);
+                    }
 
-            doc = new AccountDoc
-            {
-                SteamId = (long)steamId,
-                BalanceCents = defaultStartingBalance.Cents,
-                LastUpdated = _clock.UtcNow
-            };
-            accounts.Insert(doc);
-            return defaultStartingBalance;
-        });
+                    doc = new AccountDoc
+                    {
+                        SteamId = (long)steamId,
+                        BalanceCents = defaultStartingBalance.Cents,
+                        LastUpdated = _clock.UtcNow
+                    };
+                    accounts.Insert(doc);
+                    return defaultStartingBalance;
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task<WithdrawResult> TryWithdrawAsync(ulong steamId, Money amount, string reason, Money defaultStartingBalance) => EnqueueAsync(() =>
+        public async Task<WithdrawResult> TryWithdrawAsync(ulong steamId, Money amount, string reason, Money defaultStartingBalance)
         {
             if (amount.Cents <= 0) return WithdrawResult.Failed(Money.Zero);
 
-            var accounts = _db.GetCollection<AccountDoc>("accounts");
-            var doc = FindAccount((long)steamId);
-            if (doc == null)
+            return await Task.Run(() =>
             {
-                doc = new AccountDoc
+                lock (_dbLock)
                 {
-                    SteamId = (long)steamId,
-                    BalanceCents = defaultStartingBalance.Cents,
-                    LastUpdated = _clock.UtcNow
-                };
-                accounts.Insert(doc);
-            }
+                    var accounts = _db.GetCollection<AccountDoc>("accounts");
+                    var doc = FindAccount((long)steamId);
+                    if (doc == null)
+                    {
+                        doc = new AccountDoc
+                        {
+                            SteamId = (long)steamId,
+                            BalanceCents = defaultStartingBalance.Cents,
+                            LastUpdated = _clock.UtcNow
+                        };
+                        accounts.Insert(doc);
+                    }
 
-            if (doc.BalanceCents < amount.Cents)
-            {
-                return WithdrawResult.Failed(Money.FromCents(doc.BalanceCents));
-            }
+                    if (doc.BalanceCents < amount.Cents)
+                    {
+                        return WithdrawResult.Failed(Money.FromCents(doc.BalanceCents));
+                    }
 
-            var oldBal = Money.FromCents(doc.BalanceCents);
-            doc.BalanceCents -= amount.Cents;
-            doc.LastUpdated = _clock.UtcNow;
-            accounts.Update(doc);
+                    var oldBal = Money.FromCents(doc.BalanceCents);
+                    doc.BalanceCents -= amount.Cents;
+                    doc.LastUpdated = _clock.UtcNow;
+                    accounts.Update(doc);
 
-            LogTransactionInternal(steamId, "Withdraw", -amount.Cents, reason);
-            return WithdrawResult.Succeeded(oldBal, Money.FromCents(doc.BalanceCents));
-        });
+                    LogTransactionInternal(steamId, "Withdraw", -amount.Cents, reason);
+                    return WithdrawResult.Succeeded(oldBal, Money.FromCents(doc.BalanceCents));
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task<DepositResult> DepositAsync(ulong steamId, Money amount, string reason, Money defaultStartingBalance, Money? maxBalance = null, bool ignoreMaxBalance = false) => EnqueueAsync(() =>
+        public async Task<DepositResult> DepositAsync(ulong steamId, Money amount, string reason, Money defaultStartingBalance, Money? maxBalance = null, bool ignoreMaxBalance = false)
         {
-            var accounts = _db.GetCollection<AccountDoc>("accounts");
-            var doc = FindAccount((long)steamId);
-            if (doc == null)
+            return await Task.Run(() =>
             {
-                doc = new AccountDoc
+                lock (_dbLock)
                 {
-                    SteamId = (long)steamId,
-                    BalanceCents = defaultStartingBalance.Cents,
-                    LastUpdated = _clock.UtcNow
-                };
-                accounts.Insert(doc);
-            }
+                    var accounts = _db.GetCollection<AccountDoc>("accounts");
+                    var doc = FindAccount((long)steamId);
+                    if (doc == null)
+                    {
+                        doc = new AccountDoc
+                        {
+                            SteamId = (long)steamId,
+                            BalanceCents = defaultStartingBalance.Cents,
+                            LastUpdated = _clock.UtcNow
+                        };
+                        accounts.Insert(doc);
+                    }
 
-            var oldBal = Money.FromCents(doc.BalanceCents);
-            long newCents = doc.BalanceCents + amount.Cents;
+                    var oldBal = Money.FromCents(doc.BalanceCents);
+                    long newCents = doc.BalanceCents + amount.Cents;
 
-            if (!ignoreMaxBalance && maxBalance.HasValue && maxBalance.Value.Cents > 0 && newCents > maxBalance.Value.Cents)
-            {
-                newCents = maxBalance.Value.Cents;
-            }
+                    if (!ignoreMaxBalance && maxBalance.HasValue && maxBalance.Value.Cents > 0 && newCents > maxBalance.Value.Cents)
+                    {
+                        newCents = maxBalance.Value.Cents;
+                    }
 
-            long actualDelta = newCents - doc.BalanceCents;
-            doc.BalanceCents = newCents;
-            doc.LastUpdated = _clock.UtcNow;
-            accounts.Update(doc);
+                    long actualDelta = newCents - doc.BalanceCents;
+                    doc.BalanceCents = newCents;
+                    doc.LastUpdated = _clock.UtcNow;
+                    accounts.Update(doc);
 
-            if (actualDelta != 0)
-            {
-                LogTransactionInternal(steamId, ignoreMaxBalance ? "Refund" : "Deposit", actualDelta, reason);
-            }
+                    if (actualDelta != 0)
+                    {
+                        LogTransactionInternal(steamId, ignoreMaxBalance ? "Refund" : "Deposit", actualDelta, reason);
+                    }
 
-            return new DepositResult(true, oldBal, Money.FromCents(newCents));
-        });
+                    return new DepositResult(true, oldBal, Money.FromCents(newCents));
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task<TransferResult> TransferAsync(ulong fromSteamId, ulong toSteamId, Money amount, string reason, Money defaultStartingBalance, Money? maxBalance = null) => EnqueueAsync(() =>
+        public async Task<TransferResult> TransferAsync(ulong fromSteamId, ulong toSteamId, Money amount, string reason, Money defaultStartingBalance, Money? maxBalance = null)
         {
             if (amount.Cents <= 0 || fromSteamId == toSteamId)
             {
                 return TransferResult.Failed(Money.Zero, Money.Zero);
             }
 
-            var accounts = _db.GetCollection<AccountDoc>("accounts");
-            var fromDoc = FindAccount((long)fromSteamId);
-            if (fromDoc == null)
+            return await Task.Run(() =>
             {
-                fromDoc = new AccountDoc
+                lock (_dbLock)
                 {
-                    SteamId = (long)fromSteamId,
-                    BalanceCents = defaultStartingBalance.Cents,
-                    LastUpdated = _clock.UtcNow
-                };
-                accounts.Insert(fromDoc);
-            }
+                    var accounts = _db.GetCollection<AccountDoc>("accounts");
+                    var fromDoc = FindAccount((long)fromSteamId);
+                    if (fromDoc == null)
+                    {
+                        fromDoc = new AccountDoc
+                        {
+                            SteamId = (long)fromSteamId,
+                            BalanceCents = defaultStartingBalance.Cents,
+                            LastUpdated = _clock.UtcNow
+                        };
+                        accounts.Insert(fromDoc);
+                    }
 
-            if (fromDoc.BalanceCents < amount.Cents)
-            {
-                var toDocCur = FindAccount((long)toSteamId);
-                var toBalCur = toDocCur != null ? Money.FromCents(toDocCur.BalanceCents) : Money.Zero;
-                return TransferResult.Failed(Money.FromCents(fromDoc.BalanceCents), toBalCur);
-            }
+                    if (fromDoc.BalanceCents < amount.Cents)
+                    {
+                        var toDocCur = FindAccount((long)toSteamId);
+                        var toBalCur = toDocCur != null ? Money.FromCents(toDocCur.BalanceCents) : Money.Zero;
+                        return TransferResult.Failed(Money.FromCents(fromDoc.BalanceCents), toBalCur);
+                    }
 
-            var toDoc = FindAccount((long)toSteamId);
-            if (toDoc == null)
-            {
-                toDoc = new AccountDoc
-                {
-                    SteamId = (long)toSteamId,
-                    BalanceCents = defaultStartingBalance.Cents,
-                    LastUpdated = _clock.UtcNow
-                };
-                accounts.Insert(toDoc);
-            }
+                    var toDoc = FindAccount((long)toSteamId);
+                    if (toDoc == null)
+                    {
+                        toDoc = new AccountDoc
+                        {
+                            SteamId = (long)toSteamId,
+                            BalanceCents = defaultStartingBalance.Cents,
+                            LastUpdated = _clock.UtcNow
+                        };
+                        accounts.Insert(toDoc);
+                    }
 
-            if (maxBalance.HasValue && maxBalance.Value.Cents > 0 && (toDoc.BalanceCents + amount.Cents) > maxBalance.Value.Cents)
-            {
-                return TransferResult.Failed(Money.FromCents(fromDoc.BalanceCents), Money.FromCents(toDoc.BalanceCents));
-            }
+                    if (maxBalance.HasValue && maxBalance.Value.Cents > 0 && (toDoc.BalanceCents + amount.Cents) > maxBalance.Value.Cents)
+                    {
+                        return TransferResult.Failed(Money.FromCents(fromDoc.BalanceCents), Money.FromCents(toDoc.BalanceCents));
+                    }
 
-            var fromOld = Money.FromCents(fromDoc.BalanceCents);
-            var toOld = Money.FromCents(toDoc.BalanceCents);
+                    var fromOld = Money.FromCents(fromDoc.BalanceCents);
+                    var toOld = Money.FromCents(toDoc.BalanceCents);
 
-            fromDoc.BalanceCents -= amount.Cents;
-            fromDoc.LastUpdated = _clock.UtcNow;
-            accounts.Update(fromDoc);
+                    fromDoc.BalanceCents -= amount.Cents;
+                    fromDoc.LastUpdated = _clock.UtcNow;
+                    accounts.Update(fromDoc);
 
-            toDoc.BalanceCents += amount.Cents;
-            toDoc.LastUpdated = _clock.UtcNow;
-            accounts.Update(toDoc);
+                    toDoc.BalanceCents += amount.Cents;
+                    toDoc.LastUpdated = _clock.UtcNow;
+                    accounts.Update(toDoc);
 
-            LogTransactionInternal(fromSteamId, "TransferSent", -amount.Cents, $"To:{toSteamId} - {reason}");
-            LogTransactionInternal(toSteamId, "TransferReceived", amount.Cents, $"From:{fromSteamId} - {reason}");
+                    LogTransactionInternal(fromSteamId, "TransferSent", -amount.Cents, $"To:{toSteamId} - {reason}");
+                    LogTransactionInternal(toSteamId, "TransferReceived", amount.Cents, $"From:{fromSteamId} - {reason}");
 
-            return TransferResult.Succeeded(
-                fromOld, Money.FromCents(fromDoc.BalanceCents),
-                toOld, Money.FromCents(toDoc.BalanceCents));
-        });
+                    return TransferResult.Succeeded(
+                        fromOld, Money.FromCents(fromDoc.BalanceCents),
+                        toOld, Money.FromCents(toDoc.BalanceCents));
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task<List<TopBalanceEntry>> GetTopBalancesAsync(int count) => EnqueueAsync(() =>
+        public async Task<List<TopBalanceEntry>> GetTopBalancesAsync(int count)
         {
             if (count <= 0) count = 10;
-            var accounts = _db.GetCollection<AccountDoc>("accounts");
-            return accounts.Find(Query.All("BalanceCents", Query.Descending), limit: count)
-                .Select(a => new TopBalanceEntry((ulong)a.SteamId, Money.FromCents(a.BalanceCents)))
-                .ToList();
-        });
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var accounts = _db.GetCollection<AccountDoc>("accounts");
+                    return accounts.Find(Query.All("BalanceCents", Query.Descending), limit: count)
+                        .Select(a => new TopBalanceEntry((ulong)a.SteamId, Money.FromCents(a.BalanceCents)))
+                        .ToList();
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task SetBalanceAsync(ulong steamId, Money amount, string reason) => EnqueueAsync(() =>
+        public async Task SetBalanceAsync(ulong steamId, Money amount, string reason)
         {
-            var accounts = _db.GetCollection<AccountDoc>("accounts");
-            var doc = FindAccount((long)steamId) ?? new AccountDoc { SteamId = (long)steamId };
-            doc.BalanceCents = amount.Cents;
-            doc.LastUpdated = _clock.UtcNow;
-            accounts.Upsert(doc);
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var accounts = _db.GetCollection<AccountDoc>("accounts");
+                    var doc = FindAccount((long)steamId) ?? new AccountDoc { SteamId = (long)steamId };
+                    doc.BalanceCents = amount.Cents;
+                    doc.LastUpdated = _clock.UtcNow;
+                    accounts.Upsert(doc);
 
-            LogTransactionInternal(steamId, "SetBalance", amount.Cents, reason);
-        });
+                    LogTransactionInternal(steamId, "SetBalance", amount.Cents, reason);
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task LogTransactionAsync(ulong steamId, string type, Money amount, string details) => EnqueueAsync(() =>
+        public async Task LogTransactionAsync(ulong steamId, string type, Money amount, string details)
         {
-            LogTransactionInternal(steamId, type, amount.Cents, details);
-        });
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    LogTransactionInternal(steamId, type, amount.Cents, details);
+                }
+            }).ConfigureAwait(false);
+        }
 
-        public Task PruneLogsAsync(int retentionDays) => EnqueueAsync(() =>
+        public async Task PruneLogsAsync(int retentionDays)
         {
             if (retentionDays <= 0) return;
             var cutoff = _clock.UtcNow.AddDays(-retentionDays);
-            var txs = _db.GetCollection<TransactionDoc>("transactions");
-            txs.DeleteMany(x => x.Timestamp < cutoff);
-        });
+
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var txs = _db.GetCollection<TransactionDoc>("transactions");
+                    txs.DeleteMany(x => x.Timestamp < cutoff);
+                }
+            }).ConfigureAwait(false);
+        }
 
         private void LogTransactionInternal(ulong steamId, string type, long amountCents, string details)
         {
@@ -352,18 +342,10 @@ namespace KizShop.Storage
             if (_disposed) return;
             _disposed = true;
 
-            try
+            lock (_dbLock)
             {
-                EnqueueAsync(() =>
-                {
-                    _db?.Dispose();
-                }).GetAwaiter().GetResult();
+                _db?.Dispose();
             }
-            catch { }
-
-            _queue.CompleteAdding();
-            _workerThread.Join(2000);
-            _queue.Dispose();
         }
     }
 }

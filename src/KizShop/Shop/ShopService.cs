@@ -174,11 +174,13 @@ namespace KizShop.Shop
             }
         }
 
-        public List<ItemShopEntry> GetItems()
+        public List<ItemShopEntry> GetItems(bool enabledOnly = false)
         {
             lock (_lock)
             {
-                return new List<ItemShopEntry>(_data.Items);
+                return enabledOnly
+                    ? _data.Items.Where(i => i.Enabled && i.Available).ToList()
+                    : new List<ItemShopEntry>(_data.Items);
             }
         }
 
@@ -194,7 +196,7 @@ namespace KizShop.Shop
         {
             lock (_lock)
             {
-                var enabledItems = _data.Items.Where(i => i.Enabled).ToList();
+                var enabledItems = _data.Items.Where(i => i.Enabled && i.Available).ToList();
                 int totalPages = (int)Math.Ceiling((double)enabledItems.Count / pageSize);
                 if (totalPages < 1) totalPages = 1;
                 if (page < 1) page = 1;

@@ -1,4 +1,5 @@
 using System;
+using Newtonsoft.Json;
 
 namespace KizShop.Shop.Models
 {
@@ -13,7 +14,10 @@ namespace KizShop.Shop.Models
         public string Permission { get; set; } = string.Empty;
         public int? MaxAmountPerPurchase { get; set; }
 
-        public bool CanBuy => Enabled && BuyPrice > 0;
-        public bool CanSell => Enabled && SellPrice.HasValue && SellPrice.Value > 0;
+        [JsonIgnore]
+        public bool Available { get; set; } = true;
+
+        public bool CanBuy => Enabled && Available && BuyPrice > 0;
+        public bool CanSell => Enabled && Available && SellPrice.HasValue && SellPrice.Value > 0;
     }
 }
