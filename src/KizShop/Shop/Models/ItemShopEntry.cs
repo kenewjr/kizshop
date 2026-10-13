@@ -11,6 +11,14 @@ namespace KizShop.Shop.Models
         public decimal RecoveryPerHour { get; set; } = 0.05m;
         public decimal BuyIncreasePerUnit { get; set; } = 0.0m;
         public decimal MaxBuyMultiplier { get; set; } = 1.5m;
+
+        public void Normalize()
+        {
+            if (SellDecayPerUnit < 0m) SellDecayPerUnit = 0m;
+            MinSellMultiplier = Math.Clamp(MinSellMultiplier, 0m, 1m);
+            if (MaxBuyMultiplier < 1m) MaxBuyMultiplier = 1m;
+            if (RecoveryPerHour < 0m) RecoveryPerHour = 0m;
+        }
     }
 
     public class ItemShopEntry

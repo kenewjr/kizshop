@@ -65,6 +65,8 @@ namespace KizShop.Commands
             });
         }
 
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _inFlightLocks = new System.Collections.Concurrent.ConcurrentDictionary<ulong, byte>();
+
         private async Task HandleBountySetAsync(IRocketPlayer caller, string[] command)
         {
             var plugin = KizShopPlugin.Instance;
@@ -85,107 +87,147 @@ namespace KizShop.Commands
                 placerName = uPlacer.CharacterName;
             }
 
-            string targetArg = command[1];
-            string amountArg = command[2];
-
-            if (!decimal.TryParse(amountArg, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal amountDec) || amountDec < cfg.BountyMinAmount)
+            if (placerSteamId != 0 && !_inFlightLocks.TryAdd(placerSteamId, 1))
             {
                 plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("bounty_amount_invalid", cfg.BountyMinAmount), UnityEngine.Color.red));
+                    KizChat.Say(caller, plugin.Translate("transaction_in_flight"), UnityEngine.Color.red));
                 return;
             }
 
-            if (!Money.TryFromDecimal(amountDec, cfg.MaxTransactionAmount, out var escrowAmount, out _))
+            try
             {
-                plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("invalid_money_amount", "Amount exceeds max limit"), UnityEngine.Color.red));
-                return;
-            }
+                string targetArg = command[1];
+                string amountArg = command[2];
 
-            // Target resolution
-            ulong targetSteamId = 0;
-            string targetName = targetArg;
-
-            var onlineTarget = UnturnedPlayer.FromName(targetArg);
-            if (onlineTarget != null && onlineTarget.Player != null)
-            {
-                targetSteamId = onlineTarget.CSteamID.m_SteamID;
-                targetName = onlineTarget.CharacterName;
-            }
-            else if (ulong.TryParse(targetArg, out ulong parsedId) && targetArg.Length == 17)
-            {
-                targetSteamId = parsedId;
-            }
-
-            if (targetSteamId == 0)
-            {
-                plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("bounty_target_not_found", targetArg), UnityEngine.Color.red));
-                return;
-            }
-
-            if (placerSteamId != 0 && targetSteamId == placerSteamId)
-            {
-                plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("bounty_self"), UnityEngine.Color.red));
-                return;
-            }
-
-            // Check if target account exists (for offline targets)
-            bool targetExists = await plugin.Storage.AccountExistsAsync(targetSteamId).ConfigureAwait(false);
-            if (!targetExists && onlineTarget == null)
-            {
-                plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("bounty_target_not_found", targetArg), UnityEngine.Color.red));
-                return;
-            }
-
-            // Calculate fee and net bounty
-            long feeCents = (escrowAmount.Cents * cfg.BountyFeePercent) / 100;
-            long netCents = escrowAmount.Cents - feeCents;
-            var netAmount = Money.FromCents(netCents);
-
-            // Check max total bounty on target
-            var currentTotal = await plugin.Storage.GetTotalBountyOnTargetAsync(targetSteamId).ConfigureAwait(false);
-            if (cfg.BountyMaxPerTarget > 0)
-            {
-                var maxLimit = Money.FromDecimal(cfg.BountyMaxPerTarget);
-                if (currentTotal + netAmount > maxLimit)
+                if (!decimal.TryParse(amountArg, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal amountDec) || amountDec < cfg.BountyMinAmount)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        KizChat.Say(caller, plugin.Translate("bounty_max_target", plugin.FormatMoney(maxLimit)), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("bounty_amount_invalid", cfg.BountyMinAmount), UnityEngine.Color.red));
                     return;
                 }
-            }
 
-            // Withdraw from placer
-            if (placerSteamId != 0)
-            {
-                var withdraw = await plugin.Economy.TryWithdrawAsync(placerSteamId, escrowAmount, $"BountyEscrow:{targetSteamId}").ConfigureAwait(false);
-                if (!withdraw.Success)
+                if (!Money.TryFromDecimal(amountDec, cfg.MaxTransactionAmount, out var escrowAmount, out _))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("invalid_money_amount", "Amount exceeds max limit"), UnityEngine.Color.red));
+                    return;
+                }
+
+                // Target resolution
+                ulong targetSteamId = 0;
+                string targetName = targetArg;
+
+                var onlineTarget = UnturnedPlayer.FromName(targetArg);
+                if (onlineTarget != null && onlineTarget.Player != null)
+                {
+                    targetSteamId = onlineTarget.CSteamID.m_SteamID;
+                    targetName = onlineTarget.CharacterName;
+                }
+                else if (ulong.TryParse(targetArg, out ulong parsedId) && targetArg.Length == 17)
+                {
+                    targetSteamId = parsedId;
+                }
+
+                if (targetSteamId == 0)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("bounty_target_not_found", targetArg), UnityEngine.Color.red));
+                    return;
+                }
+
+                if (placerSteamId != 0 && targetSteamId == placerSteamId)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("bounty_self"), UnityEngine.Color.red));
+                    return;
+                }
+
+                // Check if target account exists (for offline targets)
+                bool targetExists = await plugin.Storage.AccountExistsAsync(targetSteamId).ConfigureAwait(false);
+                if (!targetExists && onlineTarget == null)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("bounty_target_not_found", targetArg), UnityEngine.Color.red));
+                    return;
+                }
+
+                // Calculate fee and net bounty
+                long feeCents = (escrowAmount.Cents * cfg.BountyFeePercent) / 100;
+                long netCents = escrowAmount.Cents - feeCents;
+                var netAmount = Money.FromCents(netCents);
+
+                // Withdraw from placer
+                if (placerSteamId != 0)
+                {
+                    var withdraw = await plugin.Economy.TryWithdrawAsync(placerSteamId, escrowAmount, $"BountyEscrow:{targetSteamId}").ConfigureAwait(false);
+                    if (!withdraw.Success)
                     {
-                        var curBal = plugin.Economy.GetCachedBalance(placerSteamId);
-                        KizChat.Say(caller, plugin.Translate("bounty_insufficient_funds", plugin.FormatMoney(escrowAmount), plugin.FormatMoney(curBal)), UnityEngine.Color.red);
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                        {
+                            var curBal = plugin.Economy.GetCachedBalance(placerSteamId);
+                            KizChat.Say(caller, plugin.Translate("bounty_insufficient_funds", plugin.FormatMoney(escrowAmount), plugin.FormatMoney(curBal)), UnityEngine.Color.red);
+                        });
+                        return;
+                    }
+                }
+
+                var maxLimit = cfg.BountyMaxPerTarget > 0 ? Money.FromDecimal(cfg.BountyMaxPerTarget) : Money.Zero;
+                (bool Created, Money CurrentTotal) bountyResult;
+                try
+                {
+                    bountyResult = await plugin.Storage.CreateBountyIfWithinLimitAsync(
+                        placerSteamId,
+                        targetSteamId,
+                        escrowAmount,
+                        netAmount,
+                        DateTime.UtcNow,
+                        maxLimit).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] CreateBountyIfWithinLimitAsync exception: {ex}");
+                    bountyResult = (false, Money.Zero);
+                }
+
+                if (!bountyResult.Created)
+                {
+                    if (placerSteamId != 0)
+                    {
+                        await plugin.Economy.DepositAsync(placerSteamId, escrowAmount, $"Refund:BountyFailed:{targetSteamId}", ignoreMaxBalance: true).ConfigureAwait(false);
+                    }
+
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                    {
+                        if (cfg.BountyMaxPerTarget > 0 && bountyResult.CurrentTotal + netAmount > maxLimit)
+                        {
+                            KizChat.Say(caller, plugin.Translate("bounty_max_target", plugin.FormatMoney(maxLimit)), UnityEngine.Color.red);
+                        }
+                        else
+                        {
+                            KizChat.Say(caller, plugin.Translate("bounty_failed", "Failed to place bounty, escrow refunded"), UnityEngine.Color.red);
+                        }
                     });
                     return;
                 }
-            }
 
-            // Record bounty
-            await plugin.Storage.CreateBountyAsync(placerSteamId, targetSteamId, escrowAmount, netAmount, DateTime.UtcNow).ConfigureAwait(false);
-
-            plugin.Dispatcher.QueueOnMainThread(() =>
-            {
-                var netFormatted = plugin.FormatMoney(netAmount);
-                KizChat.Say(caller, plugin.Translate("bounty_set_success", netFormatted, targetName), UnityEngine.Color.green);
-
-                if (cfg.BountyAnnounceInChat)
+                plugin.Dispatcher.QueueOnMainThread(() =>
                 {
-                    KizChat.Broadcast(plugin.Translate("bounty_broadcast", placerName, netFormatted, targetName), UnityEngine.Color.yellow);
+                    var netFormatted = plugin.FormatMoney(netAmount);
+                    KizChat.Say(caller, plugin.Translate("bounty_set_success", netFormatted, targetName), UnityEngine.Color.green);
+
+                    if (cfg.BountyAnnounceInChat)
+                    {
+                        KizChat.Broadcast(plugin.Translate("bounty_broadcast", placerName, netFormatted, targetName), UnityEngine.Color.yellow);
+                    }
+                });
+            }
+            finally
+            {
+                if (placerSteamId != 0)
+                {
+                    _inFlightLocks.TryRemove(placerSteamId, out _);
                 }
-            });
+            }
         }
 
         private async Task HandleBountyListAsync(IRocketPlayer caller, string[] command)

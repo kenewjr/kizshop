@@ -118,23 +118,22 @@ namespace KizShop.API
                 return false;
             }
 
-            if (!string.IsNullOrEmpty(eventKey) && await KizShopPlugin.Instance.Storage.HasRewardEventAsync(eventKey).ConfigureAwait(false))
-            {
-                return false;
-            }
-
             var maxTx = KizShopPlugin.Instance.Configuration.Instance.MaxTransactionAmount;
             if (!Money.TryFromDecimal(amount, maxTx, out var money, out _) || money <= Money.Zero)
             {
                 return false;
             }
 
-            var dep = await KizShopPlugin.Instance.Economy.DepositAsync(steamId, money, reason ?? "API_Reward", ignoreMaxBalance: false).ConfigureAwait(false);
-            if (dep.Success && !string.IsNullOrEmpty(eventKey))
+            if (!string.IsNullOrEmpty(eventKey))
             {
-                await KizShopPlugin.Instance.Storage.RecordRewardEventAsync(eventKey, reason ?? "Reward", money, DateTime.UtcNow).ConfigureAwait(false);
+                bool recorded = await KizShopPlugin.Instance.Storage.TryRecordRewardEventAsync(eventKey, reason ?? "Reward", money, DateTime.UtcNow).ConfigureAwait(false);
+                if (!recorded)
+                {
+                    return false;
+                }
             }
 
+            var dep = await KizShopPlugin.Instance.Economy.DepositAsync(steamId, money, reason ?? "API_Reward", ignoreMaxBalance: false).ConfigureAwait(false);
             return dep.Success;
         }
 
@@ -159,19 +158,28 @@ namespace KizShop.API
                 return result;
             }
 
-            if (!string.IsNullOrEmpty(eventKey) && await KizShopPlugin.Instance.Storage.HasRewardEventAsync(eventKey).ConfigureAwait(false))
-            {
-                result.Success = true;
-                result.Message = "Event already processed";
-                return result;
-            }
-
             var maxTx = KizShopPlugin.Instance.Configuration.Instance.MaxTransactionAmount;
             if (!Money.TryFromDecimal(pool, maxTx, out var poolMoney, out var poolErr) || poolMoney <= Money.Zero)
             {
                 result.Success = false;
                 result.Message = poolErr ?? "Invalid pool amount";
                 return result;
+            }
+
+            if (!string.IsNullOrEmpty(eventKey))
+            {
+                bool recorded = await KizShopPlugin.Instance.Storage.TryRecordRewardEventAsync(eventKey, bossName, poolMoney, DateTime.UtcNow).ConfigureAwait(false);
+                if (!recorded)
+                {
+                    var stored = await KizShopPlugin.Instance.Storage.GetRewardEventAsync(eventKey).ConfigureAwait(false);
+                    result.Success = true;
+                    result.Message = "Event already processed";
+                    if (stored != null)
+                    {
+                        result.TotalPool = stored.Pool;
+                    }
+                    return result;
+                }
             }
 
             var cfg = KizShopPlugin.Instance.Configuration.Instance;
@@ -184,17 +192,31 @@ namespace KizShop.API
                 cfg.BossRewardParticipationPercent,
                 cfg.BossRewardMinDamageSharePercent);
 
-            if (!string.IsNullOrEmpty(eventKey))
-            {
-                await KizShopPlugin.Instance.Storage.RecordRewardEventAsync(eventKey, bossName, poolMoney, DateTime.UtcNow).ConfigureAwait(false);
-            }
-
             foreach (var kvp in distribution)
             {
                 ulong targetSteamId = kvp.Key;
                 Money payout = kvp.Value;
 
                 var dep = await KizShopPlugin.Instance.Economy.DepositAsync(targetSteamId, payout, $"BossReward:{bossName}", ignoreMaxBalance: false).ConfigureAwait(false);
+                string status = dep.Success ? "Paid" : "Failed";
+
+                if (!string.IsNullOrEmpty(eventKey))
+                {
+                    try
+                    {
+                        await KizShopPlugin.Instance.Storage.RecordRewardPayoutAsync(eventKey, targetSteamId, payout, status, DateTime.UtcNow).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        KizLog.Error($"[KizShop] Failed to record payout for {targetSteamId} in {eventKey}: {ex}");
+                    }
+                }
+
+                if (!dep.Success)
+                {
+                    KizLog.Error($"[KizShop] UNPAID BOSS REWARD: Player {targetSteamId} failed to receive {payout} from {bossName} (event {eventKey})!");
+                }
+
                 result.Payouts.Add(new Shop.Models.BossRewardPayout
                 {
                     SteamId = targetSteamId,

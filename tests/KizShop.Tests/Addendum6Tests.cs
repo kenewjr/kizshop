@@ -436,12 +436,12 @@ invalid_steam_id,50.00
             };
 
             // Record event directly in storage
-            await _storage.RecordRewardEventAsync(eventKey, "AlphaBoss", Money.FromDecimal(500m), _clock.UtcNow);
-            Assert.True(await _storage.HasRewardEventAsync(eventKey));
+            bool recorded = await _storage.TryRecordRewardEventAsync(eventKey, "AlphaBoss", Money.FromDecimal(500m), _clock.UtcNow);
+            Assert.True(recorded);
 
-            // Distribute should see event already exists
-            bool hasEvent = await _storage.HasRewardEventAsync(eventKey);
-            Assert.True(hasEvent);
+            var storedEvent = await _storage.GetRewardEventAsync(eventKey);
+            Assert.NotNull(storedEvent);
+            Assert.Equal(500m, storedEvent.Pool.ToDecimal());
         }
 
         // ==========================================
@@ -670,12 +670,12 @@ invalid_steam_id,50.00
             await _storage.CreateBountyAsync(placer, target, Money.FromDecimal(100m), Money.FromDecimal(90m), _clock.UtcNow);
 
             // Killer claims bounty
-            var claim1 = await _storage.ClaimBountiesAsync(target, killer);
-            Assert.Equal(90m, claim1.ToDecimal());
+            var (claims1, total1) = await _storage.ClaimBountiesAsync(target, killer);
+            Assert.Equal(90m, total1.ToDecimal());
 
             // Immediate second claim returns 0
-            var claim2 = await _storage.ClaimBountiesAsync(target, killer);
-            Assert.Equal(0m, claim2.ToDecimal());
+            var (claims2, total2) = await _storage.ClaimBountiesAsync(target, killer);
+            Assert.Equal(0m, total2.ToDecimal());
         }
 
         [Fact]

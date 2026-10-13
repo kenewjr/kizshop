@@ -104,16 +104,24 @@ namespace KizShop.Tests
         public Task LogTransactionAsync(ulong steamId, string type, Money amount, string details) => Task.CompletedTask;
         public Task PruneLogsAsync(int retentionDays) => Task.CompletedTask;
 
-        public Task<bool> HasRewardEventAsync(string eventKey) => Task.FromResult(false);
-        public Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc) => Task.CompletedTask;
+        public Task<bool> TryRecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime utc) => Task.FromResult(true);
+        public Task<BossRewardEventEntry> GetRewardEventAsync(string eventKey) => Task.FromResult<BossRewardEventEntry>(null);
+        public Task RecordRewardPayoutAsync(string eventKey, ulong steamId, Money amount, string status, DateTime utc) => Task.CompletedTask;
+        public Task<List<RewardPayoutEntry>> GetUnpaidRewardPayoutsAsync() => Task.FromResult(new List<RewardPayoutEntry>());
+        public Task MarkRewardPayoutPaidAsync(int id, DateTime utc) => Task.CompletedTask;
+
         public Task<ItemPriceState> GetItemPriceStateAsync(ushort itemId) => Task.FromResult(new ItemPriceState { ItemId = itemId });
-        public Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc) => Task.CompletedTask;
+        public Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc, decimal recoveryPerHour) => Task.CompletedTask;
         public Task ResetItemPriceStateAsync(ushort? itemId) => Task.CompletedTask;
+
         public Task<int> CreateBountyAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc) => Task.FromResult(1);
+        public Task<(bool Created, Money CurrentTotal)> CreateBountyIfWithinLimitAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc, Money maxTotalNet) => Task.FromResult((true, netAmount));
         public Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50) => Task.FromResult(new List<BountyEntry>());
         public Task<Money> GetTotalBountyOnTargetAsync(ulong targetSteamId) => Task.FromResult(Money.Zero);
-        public Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId) => Task.FromResult(Money.Zero);
-        public Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc) => Task.FromResult(new List<BountyEntry>());
+        public Task<(List<BountyEntry> ClaimedBounties, Money TotalAmount)> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId) => Task.FromResult((new List<BountyEntry>(), Money.Zero));
+        public Task<List<BountyEntry>> GetAndMarkExpiredBountiesAsync(DateTime cutoffUtc) => Task.FromResult(new List<BountyEntry>());
+        public Task ConfirmBountyRefundAsync(int bountyId) => Task.CompletedTask;
+
         public Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc) => Task.FromResult(new DailyClaimResult { Allowed = true, Streak = 1 });
         public Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak) => Task.CompletedTask;
 

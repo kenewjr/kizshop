@@ -46,6 +46,12 @@ namespace KizShop.Shop
                         throw new InvalidDataException(valError);
                     }
 
+                    foreach (var item in parsed.Items)
+                    {
+                        if (string.IsNullOrWhiteSpace(item.Category)) item.Category = "General";
+                        item.DynamicPricing?.Normalize();
+                    }
+
                     _data = parsed;
                     return true;
                 }
@@ -399,11 +405,13 @@ namespace KizShop.Shop
                     }
                     if (entry.DynamicPricing != null)
                     {
+                        entry.DynamicPricing.Normalize();
                         existing.DynamicPricing = entry.DynamicPricing;
                     }
                 }
                 else
                 {
+                    entry.DynamicPricing?.Normalize();
                     if (string.IsNullOrWhiteSpace(entry.Category))
                     {
                         entry.Category = "General";

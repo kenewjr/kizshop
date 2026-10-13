@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using LiteDB;
 using KizShop.Common;
 using KizShop.Economy.Models;
+using KizShop.Shop;
 using KizShop.Shop.Models;
 
 namespace KizShop.Storage
@@ -70,6 +71,18 @@ namespace KizShop.Storage
             public long TargetSteamId { get; set; }
             public long EscrowCents { get; set; }
             public long NetCents { get; set; }
+            public DateTime CreatedUtc { get; set; }
+            public bool RefundPending { get; set; }
+        }
+
+        public class RewardPayoutDoc
+        {
+            [BsonId]
+            public int Id { get; set; }
+            public string EventKey { get; set; }
+            public long SteamId { get; set; }
+            public long AmountCents { get; set; }
+            public string Status { get; set; }
             public DateTime CreatedUtc { get; set; }
         }
 
@@ -391,7 +404,7 @@ namespace KizShop.Storage
             });
         }
 
-        public async Task<bool> HasRewardEventAsync(string eventKey)
+        public async Task<bool> TryRecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime utc)
         {
             if (string.IsNullOrEmpty(eventKey)) return false;
             return await Task.Run(() =>
@@ -399,26 +412,100 @@ namespace KizShop.Storage
                 lock (_dbLock)
                 {
                     var coll = _db.GetCollection<RewardEventDoc>("reward_events");
-                    return coll.Exists(Query.EQ("_id", eventKey));
-                }
-            }).ConfigureAwait(false);
-        }
+                    var existing = coll.FindOne(x => x.EventKey == eventKey);
+                    if (existing != null) return false;
 
-        public async Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc)
-        {
-            if (string.IsNullOrEmpty(eventKey)) return;
-            await Task.Run(() =>
-            {
-                lock (_dbLock)
-                {
-                    var coll = _db.GetCollection<RewardEventDoc>("reward_events");
-                    coll.Upsert(new RewardEventDoc
+                    coll.Insert(new RewardEventDoc
                     {
                         EventKey = eventKey,
                         BossName = bossName ?? string.Empty,
                         PoolCents = pool.Cents,
-                        Timestamp = timestampUtc
+                        Timestamp = utc
                     });
+                    return true;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<BossRewardEventEntry> GetRewardEventAsync(string eventKey)
+        {
+            if (string.IsNullOrEmpty(eventKey)) return null;
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<RewardEventDoc>("reward_events");
+                    var doc = coll.FindOne(x => x.EventKey == eventKey);
+                    if (doc == null) return null;
+                    return new BossRewardEventEntry
+                    {
+                        EventKey = doc.EventKey,
+                        BossName = doc.BossName,
+                        Pool = Money.FromCents(doc.PoolCents),
+                        TimestampUtc = doc.Timestamp
+                    };
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task RecordRewardPayoutAsync(string eventKey, ulong steamId, Money amount, string status, DateTime utc)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<RewardPayoutDoc>("reward_payouts");
+                    coll.Insert(new RewardPayoutDoc
+                    {
+                        EventKey = eventKey,
+                        SteamId = (long)steamId,
+                        AmountCents = amount.Cents,
+                        Status = status ?? "Pending",
+                        CreatedUtc = utc
+                    });
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<RewardPayoutEntry>> GetUnpaidRewardPayoutsAsync()
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<RewardPayoutDoc>("reward_payouts");
+                    var docs = coll.Find(x => x.Status == "Pending").ToList();
+                    var list = new List<RewardPayoutEntry>(docs.Count);
+                    foreach (var d in docs)
+                    {
+                        list.Add(new RewardPayoutEntry
+                        {
+                            Id = d.Id,
+                            EventKey = d.EventKey,
+                            SteamId = (ulong)d.SteamId,
+                            Amount = Money.FromCents(d.AmountCents),
+                            Status = d.Status,
+                            CreatedUtc = d.CreatedUtc
+                        });
+                    }
+                    return list;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task MarkRewardPayoutPaidAsync(int id, DateTime utc)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<RewardPayoutDoc>("reward_payouts");
+                    var doc = coll.FindById(id);
+                    if (doc != null)
+                    {
+                        doc.Status = "Paid";
+                        coll.Update(doc);
+                    }
                 }
             }).ConfigureAwait(false);
         }
@@ -446,13 +533,13 @@ namespace KizShop.Storage
                         ItemId = (ushort)doc.ItemId,
                         SellPressure = doc.SellPressure,
                         BuyPressure = doc.BuyPressure,
-                        LastUpdatedUtc = doc.LastUpdatedUtc
+                        LastUpdatedUtc = doc.LastUpdatedUtc.Kind == DateTimeKind.Utc ? doc.LastUpdatedUtc : doc.LastUpdatedUtc.ToUniversalTime()
                     };
                 }
             }).ConfigureAwait(false);
         }
 
-        public async Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc)
+        public async Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc, decimal recoveryPerHour)
         {
             await Task.Run(() =>
             {
@@ -472,8 +559,10 @@ namespace KizShop.Storage
                     }
                     else
                     {
-                        doc.SellPressure = Math.Max(0m, doc.SellPressure + sellDelta);
-                        doc.BuyPressure = Math.Max(0m, doc.BuyPressure + buyDelta);
+                        decimal recSell = PriceCalculator.ComputeRecoveredPressure(doc.SellPressure, doc.LastUpdatedUtc, nowUtc, recoveryPerHour);
+                        decimal recBuy = PriceCalculator.ComputeRecoveredPressure(doc.BuyPressure, doc.LastUpdatedUtc, nowUtc, recoveryPerHour);
+                        doc.SellPressure = Math.Max(0m, recSell + sellDelta);
+                        doc.BuyPressure = Math.Max(0m, recBuy + buyDelta);
                         doc.LastUpdatedUtc = nowUtc;
                     }
                     coll.Upsert(doc);
@@ -513,10 +602,51 @@ namespace KizShop.Storage
                         TargetSteamId = (long)targetSteamId,
                         EscrowCents = escrowAmount.Cents,
                         NetCents = netAmount.Cents,
-                        CreatedUtc = createdUtc
+                        CreatedUtc = createdUtc,
+                        RefundPending = false
                     };
                     var id = coll.Insert(doc);
                     return id.AsInt32;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<(bool Created, Money CurrentTotal)> CreateBountyIfWithinLimitAsync(
+            ulong placerSteamId,
+            ulong targetSteamId,
+            Money escrowAmount,
+            Money netAmount,
+            DateTime createdUtc,
+            Money maxTotalNet)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    var existing = coll.Find(x => x.TargetSteamId == (long)targetSteamId && !x.RefundPending);
+                    long currentTotalCents = 0;
+                    foreach (var e in existing)
+                    {
+                        currentTotalCents += e.NetCents;
+                    }
+
+                    if (maxTotalNet.Cents > 0 && currentTotalCents + netAmount.Cents > maxTotalNet.Cents)
+                    {
+                        return (false, Money.FromCents(currentTotalCents));
+                    }
+
+                    var doc = new BountyDoc
+                    {
+                        PlacerSteamId = (long)placerSteamId,
+                        TargetSteamId = (long)targetSteamId,
+                        EscrowCents = escrowAmount.Cents,
+                        NetCents = netAmount.Cents,
+                        CreatedUtc = createdUtc,
+                        RefundPending = false
+                    };
+                    coll.Insert(doc);
+                    return (true, Money.FromCents(currentTotalCents + netAmount.Cents));
                 }
             }).ConfigureAwait(false);
         }
@@ -528,7 +658,7 @@ namespace KizShop.Storage
                 lock (_dbLock)
                 {
                     var coll = _db.GetCollection<BountyDoc>("bounties");
-                    var docs = coll.FindAll().OrderByDescending(x => x.NetCents).Take(limit).ToList();
+                    var docs = coll.Find(x => !x.RefundPending).OrderByDescending(x => x.NetCents).Take(limit).ToList();
                     var list = new List<BountyEntry>(docs.Count);
                     foreach (var d in docs)
                     {
@@ -539,7 +669,8 @@ namespace KizShop.Storage
                             TargetSteamId = (ulong)d.TargetSteamId,
                             EscrowAmount = Money.FromCents(d.EscrowCents),
                             NetAmount = Money.FromCents(d.NetCents),
-                            CreatedUtc = d.CreatedUtc
+                            CreatedUtc = d.CreatedUtc,
+                            RefundPending = d.RefundPending
                         });
                     }
                     return list;
@@ -554,7 +685,7 @@ namespace KizShop.Storage
                 lock (_dbLock)
                 {
                     var coll = _db.GetCollection<BountyDoc>("bounties");
-                    var docs = coll.Find(x => x.TargetSteamId == (long)targetSteamId);
+                    var docs = coll.Find(x => x.TargetSteamId == (long)targetSteamId && !x.RefundPending);
                     long total = 0;
                     foreach (var d in docs)
                     {
@@ -565,38 +696,21 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
-        public async Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId)
+        public async Task<(List<BountyEntry> ClaimedBounties, Money TotalAmount)> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId)
         {
             return await Task.Run(() =>
             {
                 lock (_dbLock)
                 {
                     var coll = _db.GetCollection<BountyDoc>("bounties");
-                    var docs = coll.Find(x => x.TargetSteamId == (long)targetSteamId && x.PlacerSteamId != (long)killerSteamId).ToList();
-                    if (docs.Count == 0) return Money.Zero;
-
-                    long total = 0;
-                    foreach (var d in docs)
-                    {
-                        total += d.NetCents;
-                        coll.Delete(d.Id);
-                    }
-                    return Money.FromCents(total);
-                }
-            }).ConfigureAwait(false);
-        }
-
-        public async Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc)
-        {
-            return await Task.Run(() =>
-            {
-                lock (_dbLock)
-                {
-                    var coll = _db.GetCollection<BountyDoc>("bounties");
-                    var docs = coll.Find(x => x.CreatedUtc < cutoffUtc).ToList();
+                    var docs = coll.Find(x => x.TargetSteamId == (long)targetSteamId && x.PlacerSteamId != (long)killerSteamId && !x.RefundPending).ToList();
                     var list = new List<BountyEntry>(docs.Count);
+                    if (docs.Count == 0) return (list, Money.Zero);
+
+                    long total = 0;
                     foreach (var d in docs)
                     {
+                        total += d.NetCents;
                         list.Add(new BountyEntry
                         {
                             Id = d.Id,
@@ -604,11 +718,53 @@ namespace KizShop.Storage
                             TargetSteamId = (ulong)d.TargetSteamId,
                             EscrowAmount = Money.FromCents(d.EscrowCents),
                             NetAmount = Money.FromCents(d.NetCents),
-                            CreatedUtc = d.CreatedUtc
+                            CreatedUtc = d.CreatedUtc,
+                            RefundPending = d.RefundPending
                         });
                         coll.Delete(d.Id);
                     }
+                    return (list, Money.FromCents(total));
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<BountyEntry>> GetAndMarkExpiredBountiesAsync(DateTime cutoffUtc)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    var docs = coll.Find(x => x.CreatedUtc < cutoffUtc || x.RefundPending).ToList();
+                    var list = new List<BountyEntry>(docs.Count);
+                    foreach (var d in docs)
+                    {
+                        d.RefundPending = true;
+                        coll.Update(d);
+                        list.Add(new BountyEntry
+                        {
+                            Id = d.Id,
+                            PlacerSteamId = (ulong)d.PlacerSteamId,
+                            TargetSteamId = (ulong)d.TargetSteamId,
+                            EscrowAmount = Money.FromCents(d.EscrowCents),
+                            NetAmount = Money.FromCents(d.NetCents),
+                            CreatedUtc = d.CreatedUtc,
+                            RefundPending = true
+                        });
+                    }
                     return list;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task ConfirmBountyRefundAsync(int bountyId)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<BountyDoc>("bounties");
+                    coll.Delete(bountyId);
                 }
             }).ConfigureAwait(false);
         }

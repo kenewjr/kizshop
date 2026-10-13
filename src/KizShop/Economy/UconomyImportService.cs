@@ -103,9 +103,17 @@ namespace KizShop.Economy
                 return report;
             }
 
-            string table = string.IsNullOrWhiteSpace(cfg.UconomyImportTable) ? "uconomy" : cfg.UconomyImportTable.Trim();
-            string steamCol = string.IsNullOrWhiteSpace(cfg.UconomyImportSteamIdColumn) ? "steamId" : cfg.UconomyImportSteamIdColumn.Trim();
-            string balCol = string.IsNullOrWhiteSpace(cfg.UconomyImportBalanceColumn) ? "balance" : cfg.UconomyImportBalanceColumn.Trim();
+            string table = string.IsNullOrWhiteSpace(cfg.UconomyImportTable) ? "uconomy" : cfg.UconomyImportTable.Trim().Replace("`", "");
+            string steamCol = string.IsNullOrWhiteSpace(cfg.UconomyImportSteamIdColumn) ? "steamId" : cfg.UconomyImportSteamIdColumn.Trim().Replace("`", "");
+            string balCol = string.IsNullOrWhiteSpace(cfg.UconomyImportBalanceColumn) ? "balance" : cfg.UconomyImportBalanceColumn.Trim().Replace("`", "");
+
+            var identifierRegex = new System.Text.RegularExpressions.Regex("^[A-Za-z0-9_]+$");
+            if (!identifierRegex.IsMatch(table) || !identifierRegex.IsMatch(steamCol) || !identifierRegex.IsMatch(balCol))
+            {
+                report.ErrorCount++;
+                report.ErrorDetails.Add("Invalid table or column name configured for Uconomy import. Must match ^[A-Za-z0-9_]+$.");
+                return report;
+            }
 
             var rows = new List<(string SteamIdStr, string BalanceStr)>();
 

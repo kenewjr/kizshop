@@ -172,5 +172,78 @@ namespace KizShop
             DailyMaxStreakDays = 7;
             DailyResetUtcOffsetHours = 7;
         }
+
+        public void Normalize()
+        {
+            if (BountyFeePercent < 0 || BountyFeePercent > 100)
+            {
+                int clamped = System.Math.Clamp(BountyFeePercent, 0, 100);
+                Common.KizLog.Warning($"[KizShop] Configuration BountyFeePercent ({BountyFeePercent}) clamped to {clamped}.");
+                BountyFeePercent = clamped;
+            }
+
+            if (BountyMinAmount < 0.01m)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration BountyMinAmount ({BountyMinAmount}) corrected to 0.01.");
+                BountyMinAmount = 0.01m;
+            }
+
+            if (BountyMaxPerTarget < 0m)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration BountyMaxPerTarget ({BountyMaxPerTarget}) corrected to 0.");
+                BountyMaxPerTarget = 0m;
+            }
+
+            if (BountyExpiryDays < 1)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration BountyExpiryDays ({BountyExpiryDays}) corrected to 1.");
+                BountyExpiryDays = 1;
+            }
+
+            if (CombatTagSeconds < 0)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration CombatTagSeconds ({CombatTagSeconds}) corrected to 0.");
+                CombatTagSeconds = 0;
+            }
+
+            if (DailyMaxStreakDays < 1)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration DailyMaxStreakDays ({DailyMaxStreakDays}) corrected to 1.");
+                DailyMaxStreakDays = 1;
+            }
+
+            if (DailyStreakBonusPercentPerDay < 0)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration DailyStreakBonusPercentPerDay ({DailyStreakBonusPercentPerDay}) corrected to 0.");
+                DailyStreakBonusPercentPerDay = 0;
+            }
+
+            if (DailyResetUtcOffsetHours < -12 || DailyResetUtcOffsetHours > 14)
+            {
+                int clamped = System.Math.Clamp(DailyResetUtcOffsetHours, -12, 14);
+                Common.KizLog.Warning($"[KizShop] Configuration DailyResetUtcOffsetHours ({DailyResetUtcOffsetHours}) clamped to {clamped}.");
+                DailyResetUtcOffsetHours = clamped;
+            }
+
+            bool bossPercInvalid = BossRewardTopDamagePercent < 0 ||
+                                  BossRewardLastHitPercent < 0 ||
+                                  BossRewardParticipationPercent < 0 ||
+                                  (BossRewardTopDamagePercent + BossRewardLastHitPercent + BossRewardParticipationPercent != 100);
+
+            if (bossPercInvalid)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration BossReward percentages ({BossRewardTopDamagePercent}/{BossRewardLastHitPercent}/{BossRewardParticipationPercent}) do not sum to 100. Resetting to defaults (30/10/60/1).");
+                BossRewardTopDamagePercent = 30;
+                BossRewardLastHitPercent = 10;
+                BossRewardParticipationPercent = 60;
+                BossRewardMinDamageSharePercent = 1;
+            }
+
+            if (VehicleCooldownSeconds < 0)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration VehicleCooldownSeconds ({VehicleCooldownSeconds}) corrected to 0.");
+                VehicleCooldownSeconds = 0;
+            }
+        }
     }
 }

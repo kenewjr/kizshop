@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-13
+
+### Fixed
+- **Buy & Transaction Delivery Safety**:
+  - Introduced `delivered` tracking in `ShopTransactionService.ExecuteBuyAsync`: refunds are strictly forbidden once items have been placed into player inventory.
+  - Post-delivery errors (pressure updates, balance reads, event notifications) are logged as errors and return a `Success` transaction result falling back to `withdrawRes.NewBalance` (never `Money.Zero`).
+  - Isolated event subscriber invocations (`GetInvocationList`) with per-subscriber exception swallowing across item purchases, sales, and vehicle purchases.
+  - Applied the same irreversible success rule to `/sell`, `/sell hand`, `/sell all <category> confirm`, and `/buyvehicle`.
+- **Atomic Reward-Event Idempotency**:
+  - Added atomic `TryRecordRewardEventAsync` across LiteDB, SQLite, and MySQL to prevent duplicate reward distributions during concurrent event execution.
+  - Added persistent `RewardPayouts` tracking and automated resumption on plugin load for interrupted boss reward payouts.
+- **Dynamic Pricing Elapsed Recovery**:
+  - Updated `UpdateItemPricePressureAsync` to compute elapsed recovery before applying transaction pressure deltas (`PriceCalculator.ComputeRecoveredPressure`), preventing artificial accumulation of pressure over time.
+- **Bounty Escrow & Claim Safety**:
+  - Added per-placer in-flight lock for `/bounty set` with guaranteed escrow refund on placement errors.
+  - Added atomic `CreateBountyIfWithinLimitAsync` preventing concurrent bounty placements from exceeding per-target maximums.
+  - Added `refund_pending` flag for crash-safe bounty expiration refunds; processed automatically on startup and during sweeps.
+  - Restored original placer SteamID and creation date if bounty claim payouts fail.
+  - Decoupled PvP kill reward cooldown from bounty claims.
+- **Configuration Normalization & Input Validation**:
+  - Added `KizShopConfiguration.Normalize()` validating and clamping bounty, combat tag, daily reward, and boss reward settings.
+  - Hardened `PriceCalculator` against invalid min/max multipliers.
+  - Added regex sanitization (`^[A-Za-z0-9_]+$`) for table and column names in Uconomy import tool.
+- **Combat Tag Verification**:
+  - Deferred damage evaluation via `QueueOnMainThread` in `HandleDamagePlayerRequested`, tagging only when damage was confirmed and victim health actually decreased.
+
 ## [0.4.0] - 2026-10-12
 
 ### Added

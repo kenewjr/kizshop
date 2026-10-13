@@ -9,9 +9,14 @@ namespace KizShop.Shop
         public static decimal ComputeRecoveredPressure(decimal storedPressure, DateTime lastUpdatedUtc, DateTime nowUtc, decimal recoveryPerHour)
         {
             if (storedPressure <= 0m) return 0m;
-            if (lastUpdatedUtc >= nowUtc || recoveryPerHour <= 0m) return storedPressure;
+            if (recoveryPerHour <= 0m) return storedPressure;
 
-            double elapsedHours = (nowUtc - lastUpdatedUtc).TotalHours;
+            DateTime lastUtc = lastUpdatedUtc.Kind == DateTimeKind.Local ? lastUpdatedUtc.ToUniversalTime() : lastUpdatedUtc;
+            DateTime currentUtc = nowUtc.Kind == DateTimeKind.Local ? nowUtc.ToUniversalTime() : nowUtc;
+
+            if (lastUtc >= currentUtc) return storedPressure;
+
+            double elapsedHours = (currentUtc - lastUtc).TotalHours;
             if (elapsedHours <= 0) return storedPressure;
 
             decimal recovered = (decimal)elapsedHours * recoveryPerHour;
@@ -21,16 +26,18 @@ namespace KizShop.Shop
         public static decimal ComputeEffectiveSellMultiplier(ItemDynamicPricingConfig cfg, decimal sellPressure)
         {
             if (cfg == null || !cfg.Enabled) return 1.0m;
-            decimal mult = 1.0m - (cfg.SellDecayPerUnit * sellPressure);
-            return Math.Clamp(mult, cfg.MinSellMultiplier, 1.0m);
+            decimal mult = 1.0m - (Math.Max(0m, cfg.SellDecayPerUnit) * Math.Max(0m, sellPressure));
+            decimal minSell = Math.Clamp(cfg.MinSellMultiplier, 0m, 1.0m);
+            return Math.Clamp(mult, minSell, 1.0m);
         }
 
         public static decimal ComputeEffectiveBuyMultiplier(ItemDynamicPricingConfig cfg, decimal buyPressure)
         {
             if (cfg == null || !cfg.Enabled) return 1.0m;
             if (cfg.BuyIncreasePerUnit <= 0m) return 1.0m;
-            decimal mult = 1.0m + (cfg.BuyIncreasePerUnit * buyPressure);
-            return Math.Clamp(mult, 1.0m, cfg.MaxBuyMultiplier);
+            decimal mult = 1.0m + (cfg.BuyIncreasePerUnit * Math.Max(0m, buyPressure));
+            decimal maxBuy = Math.Max(1.0m, cfg.MaxBuyMultiplier);
+            return Math.Clamp(mult, 1.0m, maxBuy);
         }
 
         public static Money CalculateSingleUnitBuyPrice(

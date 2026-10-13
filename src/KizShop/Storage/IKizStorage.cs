@@ -21,20 +21,25 @@ namespace KizShop.Storage
         Task PruneLogsAsync(int retentionDays);
 
         // Boss Rewards
-        Task<bool> HasRewardEventAsync(string eventKey);
-        Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc);
+        Task<bool> TryRecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime utc);
+        Task<BossRewardEventEntry> GetRewardEventAsync(string eventKey);
+        Task RecordRewardPayoutAsync(string eventKey, ulong steamId, Money amount, string status, DateTime utc);
+        Task<List<RewardPayoutEntry>> GetUnpaidRewardPayoutsAsync();
+        Task MarkRewardPayoutPaidAsync(int id, DateTime utc);
 
         // Dynamic Pricing
         Task<ItemPriceState> GetItemPriceStateAsync(ushort itemId);
-        Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc);
+        Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc, decimal recoveryPerHour);
         Task ResetItemPriceStateAsync(ushort? itemId);
 
         // Bounties
         Task<int> CreateBountyAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc);
+        Task<(bool Created, Money CurrentTotal)> CreateBountyIfWithinLimitAsync(ulong placerSteamId, ulong targetSteamId, Money escrowAmount, Money netAmount, DateTime createdUtc, Money maxTotalNet);
         Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50);
         Task<Money> GetTotalBountyOnTargetAsync(ulong targetSteamId);
-        Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId);
-        Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc);
+        Task<(List<BountyEntry> ClaimedBounties, Money TotalAmount)> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId);
+        Task<List<BountyEntry>> GetAndMarkExpiredBountiesAsync(DateTime cutoffUtc);
+        Task ConfirmBountyRefundAsync(int bountyId);
 
         // Daily Claims
         Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc);

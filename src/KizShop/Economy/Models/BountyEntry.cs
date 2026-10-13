@@ -11,5 +11,6 @@ namespace KizShop.Economy.Models
         public Money EscrowAmount { get; set; }
         public Money NetAmount { get; set; }
         public DateTime CreatedUtc { get; set; }
+        public bool RefundPending { get; set; }
     }
 }

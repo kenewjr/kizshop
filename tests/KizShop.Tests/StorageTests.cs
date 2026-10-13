@@ -62,14 +62,20 @@ namespace KizShop.Tests
         public async Task RewardEvents_RecordAndCheckExistence_Idempotent()
         {
             string key = "boss_megazombie_101";
-            Assert.False(await _storage.HasRewardEventAsync(key));
+            var existing = await _storage.GetRewardEventAsync(key);
+            Assert.Null(existing);
 
-            await _storage.RecordRewardEventAsync(key, "MegaZombie", Money.FromDecimal(1000m), DateTime.UtcNow);
-            Assert.True(await _storage.HasRewardEventAsync(key));
+            bool first = await _storage.TryRecordRewardEventAsync(key, "MegaZombie", Money.FromDecimal(1000m), DateTime.UtcNow);
+            Assert.True(first);
 
-            // Calling again with same key does not throw
-            await _storage.RecordRewardEventAsync(key, "MegaZombie", Money.FromDecimal(1000m), DateTime.UtcNow);
-            Assert.True(await _storage.HasRewardEventAsync(key));
+            var stored = await _storage.GetRewardEventAsync(key);
+            Assert.NotNull(stored);
+            Assert.Equal("MegaZombie", stored.BossName);
+            Assert.Equal(1000m, stored.Pool.ToDecimal());
+
+            // Calling again with same key returns false atomically
+            bool second = await _storage.TryRecordRewardEventAsync(key, "MegaZombie", Money.FromDecimal(1000m), DateTime.UtcNow);
+            Assert.False(second);
         }
 
         [Fact]
@@ -81,7 +87,7 @@ namespace KizShop.Tests
             Assert.Equal(0m, initial.BuyPressure);
 
             var now = DateTime.UtcNow;
-            await _storage.UpdateItemPricePressureAsync(itemId, sellDelta: 5.5m, buyDelta: 2.0m, now);
+            await _storage.UpdateItemPricePressureAsync(itemId, sellDelta: 5.5m, buyDelta: 2.0m, now, recoveryPerHour: 0m);
 
             var updated = await _storage.GetItemPriceStateAsync(itemId);
             Assert.Equal(5.5m, updated.SellPressure);
@@ -94,7 +100,7 @@ namespace KizShop.Tests
             Assert.Equal(0m, reset.BuyPressure);
 
             // Reset all
-            await _storage.UpdateItemPricePressureAsync(itemId, sellDelta: 3m, buyDelta: 1m, now);
+            await _storage.UpdateItemPricePressureAsync(itemId, sellDelta: 3m, buyDelta: 1m, now, recoveryPerHour: 0m);
             await _storage.ResetItemPriceStateAsync(null);
             var resetAll = await _storage.GetItemPriceStateAsync(itemId);
             Assert.Equal(0m, resetAll.SellPressure);
@@ -132,8 +138,10 @@ namespace KizShop.Tests
             await _storage.CreateBountyAsync(placerB, target, Money.FromDecimal(200m), Money.FromDecimal(180m), created);
 
             // Placer A kills target -> Placer A cannot claim their own bounty (90m), only placer B's bounty (180m)
-            var claimed = await _storage.ClaimBountiesAsync(target, placerA);
-            Assert.Equal(180m, claimed.ToDecimal());
+            var (claimedEntries, claimedAmount) = await _storage.ClaimBountiesAsync(target, placerA);
+            Assert.Equal(180m, claimedAmount.ToDecimal());
+            Assert.Single(claimedEntries);
+            Assert.Equal(placerB, claimedEntries[0].PlacerSteamId);
 
             // Target still has placer A's bounty
             var remaining = await _storage.GetTotalBountyOnTargetAsync(target);
@@ -141,12 +149,12 @@ namespace KizShop.Tests
 
             // A second claim by someone else (e.g. placer C) claims the remaining 90m
             ulong placerC = 76561198000000004;
-            var claimed2 = await _storage.ClaimBountiesAsync(target, placerC);
-            Assert.Equal(90m, claimed2.ToDecimal());
+            var (_, claimedAmount2) = await _storage.ClaimBountiesAsync(target, placerC);
+            Assert.Equal(90m, claimedAmount2.ToDecimal());
 
             // Third claim returns 0
-            var claimed3 = await _storage.ClaimBountiesAsync(target, placerC);
-            Assert.Equal(0m, claimed3.ToDecimal());
+            var (_, claimedAmount3) = await _storage.ClaimBountiesAsync(target, placerC);
+            Assert.Equal(0m, claimedAmount3.ToDecimal());
         }
 
         [Fact]
@@ -161,12 +169,15 @@ namespace KizShop.Tests
             await _storage.CreateBountyAsync(placer, target, Money.FromDecimal(200m), Money.FromDecimal(180m), freshDate);
 
             var cutoff = DateTime.UtcNow.AddDays(-7);
-            var refunded = await _storage.RefundExpiredBountiesAsync(cutoff);
+            var expired = await _storage.GetAndMarkExpiredBountiesAsync(cutoff);
 
-            Assert.Single(refunded);
-            Assert.Equal(90m, refunded[0].NetAmount.ToDecimal());
+            Assert.Single(expired);
+            Assert.Equal(90m, expired[0].NetAmount.ToDecimal());
 
-            // Only fresh remains
+            // Delete confirmed refund
+            await _storage.ConfirmBountyRefundAsync(expired[0].Id);
+
+            // Only fresh remains active
             var remaining = await _storage.GetTotalBountyOnTargetAsync(target);
             Assert.Equal(180m, remaining.ToDecimal());
         }

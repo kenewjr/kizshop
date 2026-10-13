@@ -145,18 +145,76 @@ namespace KizShop.Shop
             return PriceCalculator.CalculateSequentialSellPrice(entry.BuyPrice, baseSell, dynCfg, recBuy, recSell, quantity, cfg.AllowSellAboveBuy);
         }
 
-        private async Task UpdatePressureAfterTransactionAsync(ushort itemId, decimal sellDelta, decimal buyDelta)
+        private void SafeRaiseItemPurchased(ulong steamId, ItemShopEntry entry, int quantity, Money totalMoney, Money newBal)
+        {
+            var handlers = OnItemPurchased?.GetInvocationList();
+            if (handlers == null) return;
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    ((Action<ulong, ItemShopEntry, int, Money, Money>)handler)(steamId, entry, quantity, totalMoney, newBal);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Error in OnItemPurchased subscriber: {ex}");
+                }
+            }
+        }
+
+        private void SafeRaiseItemSold(ulong steamId, ItemShopEntry entry, int quantity, Money totalPayout, Money newBal)
+        {
+            var handlers = OnItemSold?.GetInvocationList();
+            if (handlers == null) return;
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    ((Action<ulong, ItemShopEntry, int, Money, Money>)handler)(steamId, entry, quantity, totalPayout, newBal);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Error in OnItemSold subscriber: {ex}");
+                }
+            }
+        }
+
+        private void SafeRaiseVehiclePurchased(ulong steamId, VehicleShopEntry entry, Money cost, Money newBal)
+        {
+            var handlers = OnVehiclePurchased?.GetInvocationList();
+            if (handlers == null) return;
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    ((Action<ulong, VehicleShopEntry, Money, Money>)handler)(steamId, entry, cost, newBal);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Error in OnVehiclePurchased subscriber: {ex}");
+                }
+            }
+        }
+
+        private async Task UpdatePressureAfterTransactionAsync(ushort itemId, decimal sellDelta, decimal buyDelta, decimal recoveryPerHour)
         {
             if (_storage == null) return;
-            var sem = _priceSemaphores.GetOrAdd(itemId, _ => new SemaphoreSlim(1, 1));
-            await sem.WaitAsync().ConfigureAwait(false);
             try
             {
-                await _storage.UpdateItemPricePressureAsync(itemId, sellDelta, buyDelta, _clock.UtcNow).ConfigureAwait(false);
+                var sem = _priceSemaphores.GetOrAdd(itemId, _ => new SemaphoreSlim(1, 1));
+                await sem.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await _storage.UpdateItemPricePressureAsync(itemId, sellDelta, buyDelta, _clock.UtcNow, recoveryPerHour).ConfigureAwait(false);
+                }
+                finally
+                {
+                    sem.Release();
+                }
             }
-            finally
+            catch (Exception ex)
             {
-                sem.Release();
+                KizLog.Error($"[KizShop] Error updating price pressure for item {itemId}: {ex}");
             }
         }
 
@@ -215,6 +273,10 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
 
+            bool delivered = false;
+            var deliveredItems = new System.Collections.Generic.List<SDG.Unturned.Item>();
+            WithdrawResult withdrawRes = null;
+
             try
             {
                 var spaceRes = await _inventoryGateway.CheckSpaceAsync(steamId, entry.Id, quantity).ConfigureAwait(false);
@@ -241,7 +303,7 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = errKey, ErrorArgs = errArgs };
                 }
 
-                var withdrawRes = await _economyService.TryWithdrawAsync(steamId, totalMoney, $"ShopBuy:{entry.Id}x{quantity}").ConfigureAwait(false);
+                withdrawRes = await _economyService.TryWithdrawAsync(steamId, totalMoney, $"ShopBuy:{entry.Id}x{quantity}").ConfigureAwait(false);
                 if (!withdrawRes.Success)
                 {
                     var curBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
@@ -255,7 +317,6 @@ namespace KizShop.Shop
 
                 bool deliverySucceeded = true;
                 bool autoEquip = cfg.AutoEquipPurchasedItems;
-                var deliveredItems = new System.Collections.Generic.List<SDG.Unturned.Item>();
                 for (int i = 0; i < quantity; i++)
                 {
                     var item = await _inventoryGateway.CreateItemAsync(entry.Id).ConfigureAwait(false);
@@ -277,23 +338,52 @@ namespace KizShop.Shop
 
                 if (!deliverySucceeded)
                 {
-                    foreach (var delivered in deliveredItems)
+                    foreach (var deliveredItem in deliveredItems)
                     {
-                        await _inventoryGateway.RemoveItemByReferenceAsync(steamId, delivered).ConfigureAwait(false);
+                        await _inventoryGateway.RemoveItemByReferenceAsync(steamId, deliveredItem).ConfigureAwait(false);
                     }
                     await _economyService.DepositAsync(steamId, totalMoney, $"Refund:ShopBuyFail:{entry.Id}x{quantity}", ignoreMaxBalance: true).ConfigureAwait(false);
                     KizLog.Warning($"[KizShop] Buy delivery failed for {steamId} ({entry.Id}x{quantity}). Refunded {totalMoney}.");
                     return new ShopTransactionResult { Success = false, ErrorKey = "buy_failed_refunded" };
                 }
 
-                // Update pressure after successful delivery
-                if (entry.DynamicPricing != null && entry.DynamicPricing.Enabled && entry.DynamicPricing.BuyIncreasePerUnit > 0m)
+                delivered = true;
+
+                // Post-delivery step: pressure update
+                var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = cfg.DynamicPricingDefaultEnabled };
+                if (dynCfg.Enabled && dynCfg.BuyIncreasePerUnit > 0m)
                 {
-                    await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: 0, buyDelta: quantity).ConfigureAwait(false);
+                    try
+                    {
+                        await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: 0, buyDelta: quantity, dynCfg.RecoveryPerHour).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        KizLog.Error($"[KizShop] Post-delivery pressure update failed for {entry.Id}: {ex}");
+                    }
                 }
 
-                var newBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
-                OnItemPurchased?.Invoke(steamId, entry, quantity, totalMoney, newBal);
+                // Balance read with fallback to withdrawRes.NewBalance
+                Money newBal = withdrawRes.NewBalance;
+                try
+                {
+                    newBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Failed to fetch balance after delivery for {steamId}: {ex}");
+                }
+
+                // Event subscribers invoked safely one by one
+                try
+                {
+                    SafeRaiseItemPurchased(steamId, entry, quantity, totalMoney, newBal);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Post-delivery event invocation failed: {ex}");
+                }
+
                 return new ShopTransactionResult
                 {
                     Success = true,
@@ -306,8 +396,34 @@ namespace KizShop.Shop
             catch (Exception ex)
             {
                 KizLog.Error($"[KizShop] Unexpected exception in ExecuteBuyAsync for {steamId}: {ex}");
-                await _economyService.DepositAsync(steamId, totalMoney, $"Refund:Exception:{entry.Id}", ignoreMaxBalance: true).ConfigureAwait(false);
-                return new ShopTransactionResult { Success = false, ErrorKey = "buy_failed_refunded" };
+                if (!delivered)
+                {
+                    foreach (var deliveredItem in deliveredItems)
+                    {
+                        try
+                        {
+                            await _inventoryGateway.RemoveItemByReferenceAsync(steamId, deliveredItem).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
+
+                    if (withdrawRes != null && withdrawRes.Success)
+                    {
+                        await _economyService.DepositAsync(steamId, totalMoney, $"Refund:Exception:{entry.Id}", ignoreMaxBalance: true).ConfigureAwait(false);
+                    }
+                    return new ShopTransactionResult { Success = false, ErrorKey = "buy_failed_refunded" };
+                }
+
+                // If delivered is true, NEVER refund. Return SUCCESS with last known balance.
+                Money fallbackBal = withdrawRes?.NewBalance ?? Money.Zero;
+                return new ShopTransactionResult
+                {
+                    Success = true,
+                    ItemEntry = entry,
+                    Quantity = quantity,
+                    Price = totalMoney,
+                    NewBalance = fallbackBal
+                };
             }
             finally
             {
@@ -424,6 +540,8 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
 
+            DepositResult depositRes = null;
+            bool payoutDone = false;
             try
             {
                 var removedInstances = new List<InventoryItemInstance>();
@@ -444,7 +562,7 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
                 }
 
-                var depositRes = await _economyService.DepositAsync(steamId, totalPayout, $"ShopSell:{entry.Id}x{amountToSell}").ConfigureAwait(false);
+                depositRes = await _economyService.DepositAsync(steamId, totalPayout, $"ShopSell:{entry.Id}x{amountToSell}").ConfigureAwait(false);
                 if (!depositRes.Success)
                 {
                     foreach (var removed in removedInstances)
@@ -455,12 +573,29 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
                 }
 
+                payoutDone = true;
+
                 if (dynCfg.Enabled)
                 {
-                    await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: amountToSell, buyDelta: 0).ConfigureAwait(false);
+                    try
+                    {
+                        await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: amountToSell, buyDelta: 0, dynCfg.RecoveryPerHour).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        KizLog.Error($"[KizShop] Post-sell pressure update failed for {entry.Id}: {ex}");
+                    }
                 }
 
-                OnItemSold?.Invoke(steamId, entry, amountToSell, totalPayout, depositRes.NewBalance);
+                try
+                {
+                    SafeRaiseItemSold(steamId, entry, amountToSell, totalPayout, depositRes.NewBalance);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Post-sell event invocation failed: {ex}");
+                }
+
                 return new ShopTransactionResult
                 {
                     Success = true,
@@ -469,6 +604,22 @@ namespace KizShop.Shop
                     Price = totalPayout,
                     NewBalance = depositRes.NewBalance
                 };
+            }
+            catch (Exception ex)
+            {
+                KizLog.Error($"[KizShop] Unexpected exception in ExecuteSellAsync for {steamId}: {ex}");
+                if (payoutDone)
+                {
+                    return new ShopTransactionResult
+                    {
+                        Success = true,
+                        ItemEntry = entry,
+                        Quantity = amountToSell,
+                        Price = totalPayout,
+                        NewBalance = depositRes?.NewBalance ?? Money.Zero
+                    };
+                }
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
             }
             finally
             {
@@ -533,6 +684,8 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
 
+            DepositResult dep = null;
+            bool payoutDone = false;
             try
             {
                 bool removed = await _inventoryGateway.RemoveItemByReferenceAsync(steamId, equipped.Item).ConfigureAwait(false);
@@ -541,19 +694,36 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
                 }
 
-                var dep = await _economyService.DepositAsync(steamId, payout, $"SellHand:{entry.Id}").ConfigureAwait(false);
+                dep = await _economyService.DepositAsync(steamId, payout, $"SellHand:{entry.Id}").ConfigureAwait(false);
                 if (!dep.Success)
                 {
                     await _inventoryGateway.TryAddItemAsync(steamId, equipped.Item).ConfigureAwait(false);
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
                 }
 
+                payoutDone = true;
+
                 if (dynCfg.Enabled)
                 {
-                    await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: 1, buyDelta: 0).ConfigureAwait(false);
+                    try
+                    {
+                        await UpdatePressureAfterTransactionAsync(entry.Id, sellDelta: 1, buyDelta: 0, dynCfg.RecoveryPerHour).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        KizLog.Error($"[KizShop] Post-sell pressure update failed for {entry.Id}: {ex}");
+                    }
                 }
 
-                OnItemSold?.Invoke(steamId, entry, 1, payout, dep.NewBalance);
+                try
+                {
+                    SafeRaiseItemSold(steamId, entry, 1, payout, dep.NewBalance);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Post-sell event invocation failed: {ex}");
+                }
+
                 return new ShopTransactionResult
                 {
                     Success = true,
@@ -563,6 +733,23 @@ namespace KizShop.Shop
                     NewBalance = dep.NewBalance,
                     Note = hadAmountArgument ? "sell_hand_amount_ignored" : null
                 };
+            }
+            catch (Exception ex)
+            {
+                KizLog.Error($"[KizShop] Unexpected exception in ExecuteSellHandAsync for {steamId}: {ex}");
+                if (payoutDone)
+                {
+                    return new ShopTransactionResult
+                    {
+                        Success = true,
+                        ItemEntry = entry,
+                        Quantity = 1,
+                        Price = payout,
+                        NewBalance = dep?.NewBalance ?? Money.Zero,
+                        Note = hadAmountArgument ? "sell_hand_amount_ignored" : null
+                    };
+                }
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
             }
             finally
             {
@@ -779,6 +966,8 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
 
+            DepositResult dep = null;
+            bool payoutDone = false;
             try
             {
                 var removedList = new List<InventoryItemInstance>();
@@ -799,7 +988,7 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
                 }
 
-                var dep = await _economyService.DepositAsync(steamId, conf.ExpectedPayout, $"SellAll:{conf.Category}x{eligibleItems.Count}").ConfigureAwait(false);
+                dep = await _economyService.DepositAsync(steamId, conf.ExpectedPayout, $"SellAll:{conf.Category}x{eligibleItems.Count}").ConfigureAwait(false);
                 if (!dep.Success)
                 {
                     foreach (var removed in removedList)
@@ -809,6 +998,8 @@ namespace KizShop.Shop
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_payout_failed" };
                 }
 
+                payoutDone = true;
+
                 // Update pressures sequentially
                 foreach (var kvp in itemCounts)
                 {
@@ -817,7 +1008,14 @@ namespace KizShop.Shop
                         var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = cfg.DynamicPricingDefaultEnabled };
                         if (dynCfg.Enabled)
                         {
-                            await UpdatePressureAfterTransactionAsync(kvp.Key, sellDelta: kvp.Value, buyDelta: 0).ConfigureAwait(false);
+                            try
+                            {
+                                await UpdatePressureAfterTransactionAsync(kvp.Key, sellDelta: kvp.Value, buyDelta: 0, dynCfg.RecoveryPerHour).ConfigureAwait(false);
+                            }
+                            catch (Exception ex)
+                            {
+                                KizLog.Error($"[KizShop] Post-sell pressure update failed for item {kvp.Key}: {ex}");
+                            }
                         }
                     }
                 }
@@ -830,6 +1028,22 @@ namespace KizShop.Shop
                     Price = conf.ExpectedPayout,
                     NewBalance = dep.NewBalance
                 };
+            }
+            catch (Exception ex)
+            {
+                KizLog.Error($"[KizShop] Unexpected exception in ExecuteSellAllCategoryConfirmAsync for {steamId}: {ex}");
+                _pendingSellAll.TryRemove(steamId, out _);
+                if (payoutDone)
+                {
+                    return new ShopTransactionResult
+                    {
+                        Success = true,
+                        Quantity = eligibleItems.Count,
+                        Price = conf.ExpectedPayout,
+                        NewBalance = dep?.NewBalance ?? Money.Zero
+                    };
+                }
+                return new ShopTransactionResult { Success = false, ErrorKey = "sell_failed" };
             }
             finally
             {
@@ -896,9 +1110,11 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
 
+            bool spawned = false;
+            WithdrawResult withdrawRes = null;
             try
             {
-                var withdrawRes = await _economyService.TryWithdrawAsync(steamId, costMoney, $"ShopBuyVehicle:{entry.Id}").ConfigureAwait(false);
+                withdrawRes = await _economyService.TryWithdrawAsync(steamId, costMoney, $"ShopBuyVehicle:{entry.Id}").ConfigureAwait(false);
                 if (!withdrawRes.Success)
                 {
                     var curBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
@@ -927,9 +1143,32 @@ namespace KizShop.Shop
                     };
                 }
 
-                _vehicleCooldowns[steamId] = _clock.UtcNow;
-                var newBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
-                OnVehiclePurchased?.Invoke(steamId, entry, costMoney, newBal);
+                spawned = true;
+
+                try
+                {
+                    _vehicleCooldowns[steamId] = _clock.UtcNow;
+                }
+                catch { }
+
+                Money newBal = withdrawRes.NewBalance;
+                try
+                {
+                    newBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Failed to fetch balance after vehicle spawn for {steamId}: {ex}");
+                }
+
+                try
+                {
+                    SafeRaiseVehiclePurchased(steamId, entry, costMoney, newBal);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Post-spawn event invocation failed: {ex}");
+                }
 
                 return new ShopTransactionResult
                 {
@@ -937,6 +1176,26 @@ namespace KizShop.Shop
                     VehicleEntry = entry,
                     Price = costMoney,
                     NewBalance = newBal
+                };
+            }
+            catch (Exception ex)
+            {
+                KizLog.Error($"[KizShop] Unexpected exception in ExecuteBuyVehicleAsync for {steamId}: {ex}");
+                if (!spawned)
+                {
+                    if (withdrawRes != null && withdrawRes.Success)
+                    {
+                        await _economyService.DepositAsync(steamId, costMoney, $"Refund:VehicleSpawnException:{entry.Id}", ignoreMaxBalance: true).ConfigureAwait(false);
+                    }
+                    return new ShopTransactionResult { Success = false, ErrorKey = "vehicle_spawn_failed", ErrorArgs = new object[] { ex.Message } };
+                }
+
+                return new ShopTransactionResult
+                {
+                    Success = true,
+                    VehicleEntry = entry,
+                    Price = costMoney,
+                    NewBalance = withdrawRes?.NewBalance ?? Money.Zero
                 };
             }
             finally

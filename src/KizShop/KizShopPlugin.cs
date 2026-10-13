@@ -184,6 +184,7 @@ namespace KizShop
             { "bounty_max_target", "<color=red>This would exceed the maximum active bounty on this target ({0}).</color>" },
             { "bounty_insufficient_funds", "<color=red>You need {0} to place this bounty, but only have {1}.</color>" },
             { "bounty_set_success", "<color=green>Bounty of {0} placed on {1}!</color>" },
+            { "bounty_failed", "<color=red>Failed to place bounty, escrow refunded.</color>" },
             { "bounty_broadcast", "<color=gold>[BOUNTY] {0} placed a bounty of {1} on {2}!</color>" },
             { "bounty_list_header", "<color=cyan>--- Active Bounties (Page {0}/{1}) ---</color>" },
             { "bounty_list_entry", "<color=yellow>{0}</color>: <color=green>{1}</color>" },
@@ -209,6 +210,8 @@ namespace KizShop
 
             try
             {
+                Configuration.Instance.Normalize();
+
                 // 1. Initialize Storage
                 try
                 {
@@ -307,9 +310,11 @@ namespace KizShop
                     Dispatcher.QueueOnMainThread(ValidateCatalog);
                 }
 
-                // 6. Start Loops
+                // 6. Start Loops and background recovery
                 StartPlaytimeLoop();
                 StartBountySweepLoop();
+                _ = ResumeUnpaidRewardPayoutsAsync();
+                _ = ProcessExpiredBountiesSweepAsync();
 
                 int mainThreadId = (Dispatcher as RocketMainThreadDispatcher)?.MainThreadId ?? Thread.CurrentThread.ManagedThreadId;
                 Logger.Log(GetBuildIdentification(mainThreadId));
@@ -459,55 +464,60 @@ namespace KizShop
                 return; // Same group: no reward or bounty
             }
 
-            // Per (killer, victim) cooldown check
-            var key = (killer: killer.CSteamID.m_SteamID, victim: player.CSteamID.m_SteamID);
-            var now = DateTime.UtcNow;
-            if (_killCooldowns.TryGetValue(key, out var lastKill))
-            {
-                if ((now - lastKill).TotalSeconds < Configuration.Instance.PlayerKillRewardCooldownSeconds)
-                {
-                    return; // On cooldown
-                }
-            }
-
-            _killCooldowns[key] = now;
-
-            // 1. Process Kill Reward (if enabled)
+            // 1. Process Kill Reward (if enabled and not on cooldown)
             if (Configuration.Instance.PlayerKillRewardEnabled &&
                 Money.TryFromDecimal(Configuration.Instance.PlayerKillRewardAmount, Configuration.Instance.MaxTransactionAmount, out var reward, out _))
             {
-                Task.Run(async () =>
+                var key = (killer: killer.CSteamID.m_SteamID, victim: player.CSteamID.m_SteamID);
+                var now = DateTime.UtcNow;
+                bool onCooldown = false;
+                if (_killCooldowns.TryGetValue(key, out var lastKill))
                 {
-                    await Economy.DepositAsync(killer.CSteamID.m_SteamID, reward, $"KillReward:{player.CharacterName}").ConfigureAwait(false);
-                    Dispatcher.QueueOnMainThread(() =>
+                    if ((now - lastKill).TotalSeconds < Configuration.Instance.PlayerKillRewardCooldownSeconds)
                     {
-                        var formatted = FormatMoney(reward);
-                        KizChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
+                        onCooldown = true;
+                    }
+                }
+
+                if (!onCooldown)
+                {
+                    _killCooldowns[key] = now;
+                    Task.Run(async () =>
+                    {
+                        await Economy.DepositAsync(killer.CSteamID.m_SteamID, reward, $"KillReward:{player.CharacterName}").ConfigureAwait(false);
+                        Dispatcher.QueueOnMainThread(() =>
+                        {
+                            var formatted = FormatMoney(reward);
+                            KizChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
+                        });
                     });
-                });
+                }
             }
 
-            // 2. Process Bounty Claim
+            // 2. Process Bounty Claim (bounties are NOT blocked by kill reward cooldown)
             if (Storage != null && Configuration.Instance.BountyEnabled)
             {
                 Task.Run(async () =>
                 {
                     try
                     {
-                        var claimed = await Storage.ClaimBountiesAsync(player.CSteamID.m_SteamID, killer.CSteamID.m_SteamID).ConfigureAwait(false);
-                        if (claimed > Money.Zero)
+                        var (claimedEntries, claimedTotal) = await Storage.ClaimBountiesAsync(player.CSteamID.m_SteamID, killer.CSteamID.m_SteamID).ConfigureAwait(false);
+                        if (claimedTotal > Money.Zero)
                         {
-                            var dep = await Economy.DepositAsync(killer.CSteamID.m_SteamID, claimed, $"BountyClaim:{player.CharacterName}").ConfigureAwait(false);
+                            var dep = await Economy.DepositAsync(killer.CSteamID.m_SteamID, claimedTotal, $"BountyClaim:{player.CharacterName}").ConfigureAwait(false);
                             if (!dep.Success)
                             {
-                                Logger.LogError($"[KizShop] Deposit failed for claimed bounty of {claimed} to {killer.CSteamID}. Re-creating bounty row.");
-                                await Storage.CreateBountyAsync(0, player.CSteamID.m_SteamID, claimed, claimed, DateTime.UtcNow).ConfigureAwait(false);
+                                Logger.LogError($"[KizShop] Deposit failed for claimed bounty of {claimedTotal} to {killer.CSteamID}. Re-creating original bounty rows.");
+                                foreach (var entry in claimedEntries)
+                                {
+                                    await Storage.CreateBountyAsync(entry.PlacerSteamId, entry.TargetSteamId, entry.EscrowAmount, entry.NetAmount, entry.CreatedUtc).ConfigureAwait(false);
+                                }
                             }
                             else
                             {
                                 Dispatcher.QueueOnMainThread(() =>
                                 {
-                                    var formatted = FormatMoney(claimed);
+                                    var formatted = FormatMoney(claimedTotal);
                                     KizChat.Say(killer, Translate("bounty_claimed_killer", formatted, player.CharacterName), UnityEngine.Color.green);
                                     if (Configuration.Instance.BountyAnnounceInChat)
                                     {
@@ -538,10 +548,22 @@ namespace KizShop
             catch { }
 
             ulong attackerSteamId = parameters.killer.m_SteamID;
-            if (victimSteamId != 0 && attackerSteamId != 0 && victimSteamId != attackerSteamId)
+            if (victimSteamId == 0 || attackerSteamId == 0 || victimSteamId == attackerSteamId) return;
+
+            // Defer combat tagging to ensure other damage handlers did not cancel/modify damage,
+            // and skip tagging if victim's health did not change (compare player.life.health before/after).
+            var life = parameters.player.life;
+            if (life == null) return;
+            byte healthBefore = life.health;
+
+            Dispatcher.QueueOnMainThread(() =>
             {
-                CombatTag?.Tag(attackerSteamId, victimSteamId);
-            }
+                if (life == null) return;
+                if (life.isDead || life.health < healthBefore)
+                {
+                    CombatTag?.Tag(attackerSteamId, victimSteamId);
+                }
+            });
         }
 
         private void HandleEnemyDisconnected(SteamPlayer player)
@@ -572,30 +594,72 @@ namespace KizShop
 
                     if (token.IsCancellationRequested) break;
 
-                    try
-                    {
-                        if (Storage != null && Economy != null && Configuration.Instance.BountyEnabled)
-                        {
-                            int expiryDays = Configuration.Instance.BountyExpiryDays;
-                            if (expiryDays <= 0) expiryDays = 7;
-                            var cutoff = Clock.UtcNow.AddDays(-expiryDays);
-
-                            var expiredList = await Storage.RefundExpiredBountiesAsync(cutoff).ConfigureAwait(false);
-                            foreach (var b in expiredList)
-                            {
-                                if (b.PlacerSteamId != 0 && b.NetAmount > Money.Zero)
-                                {
-                                    await Economy.DepositAsync(b.PlacerSteamId, b.NetAmount, "BountyExpiredRefund").ConfigureAwait(false);
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogError($"[KizShop] Error in bounty expiry sweep: {ex}");
-                    }
+                    await ProcessExpiredBountiesSweepAsync().ConfigureAwait(false);
                 }
             }, token);
+        }
+
+        private async Task ProcessExpiredBountiesSweepAsync()
+        {
+            if (Storage == null || Economy == null || !Configuration.Instance.BountyEnabled) return;
+            try
+            {
+                int expiryDays = Configuration.Instance.BountyExpiryDays;
+                if (expiryDays <= 0) expiryDays = 7;
+                var cutoff = Clock.UtcNow.AddDays(-expiryDays);
+
+                var expiredList = await Storage.GetAndMarkExpiredBountiesAsync(cutoff).ConfigureAwait(false);
+                foreach (var b in expiredList)
+                {
+                    if (b.PlacerSteamId == 0)
+                    {
+                        await Storage.ConfirmBountyRefundAsync(b.Id).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    if (b.NetAmount > Money.Zero)
+                    {
+                        var dep = await Economy.DepositAsync(b.PlacerSteamId, b.NetAmount, "BountyExpiredRefund", ignoreMaxBalance: true).ConfigureAwait(false);
+                        if (dep.Success)
+                        {
+                            await Storage.ConfirmBountyRefundAsync(b.Id).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        await Storage.ConfirmBountyRefundAsync(b.Id).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[KizShop] Error in bounty expiry sweep: {ex}");
+            }
+        }
+
+        private async Task ResumeUnpaidRewardPayoutsAsync()
+        {
+            if (Storage == null || Economy == null) return;
+            try
+            {
+                var unpaidList = await Storage.GetUnpaidRewardPayoutsAsync().ConfigureAwait(false);
+                foreach (var payout in unpaidList)
+                {
+                    var dep = await Economy.DepositAsync(payout.SteamId, payout.Amount, $"BossRewardResume:{payout.EventKey}", ignoreMaxBalance: true).ConfigureAwait(false);
+                    if (dep.Success)
+                    {
+                        await Storage.MarkRewardPayoutPaidAsync(payout.Id, DateTime.UtcNow).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        Logger.LogError($"[KizShop] Failed to resume boss reward payout of {payout.Amount} to {payout.SteamId} ({payout.EventKey})!");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[KizShop] Error resuming unpaid boss reward payouts: {ex}");
+            }
         }
 
         private void StopBountySweepLoop()

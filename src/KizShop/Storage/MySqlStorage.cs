@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using MySqlConnector;
 using KizShop.Common;
 using KizShop.Economy.Models;
+using KizShop.Shop;
 using KizShop.Shop.Models;
 
 namespace KizShop.Storage
@@ -64,6 +65,17 @@ namespace KizShop.Storage
                         last_updated DATETIME NOT NULL
                     );
 
+                    CREATE TABLE IF NOT EXISTS kiz_reward_payouts (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        event_key VARCHAR(128) NOT NULL,
+                        steam_id BIGINT UNSIGNED NOT NULL,
+                        amount BIGINT NOT NULL,
+                        status VARCHAR(32) NOT NULL,
+                        created_utc DATETIME NOT NULL,
+                        INDEX idx_payout_key (event_key),
+                        INDEX idx_payout_status (status)
+                    );
+
                     CREATE TABLE IF NOT EXISTS kiz_bounties (
                         id INT AUTO_INCREMENT PRIMARY KEY,
                         placer_steam_id BIGINT UNSIGNED NOT NULL,
@@ -71,6 +83,7 @@ namespace KizShop.Storage
                         escrow_cents BIGINT NOT NULL,
                         net_cents BIGINT NOT NULL,
                         created_utc DATETIME NOT NULL,
+                        refund_pending TINYINT(1) NOT NULL DEFAULT 0,
                         INDEX idx_target (target_steam_id),
                         INDEX idx_placer (placer_steam_id),
                         INDEX idx_created (created_utc)
@@ -87,6 +100,17 @@ namespace KizShop.Storage
                     VALUES (2, UTC_TIMESTAMP());
                 ";
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+
+                try
+                {
+                    using var alterCmd = conn.CreateCommand();
+                    alterCmd.CommandText = "ALTER TABLE kiz_bounties ADD COLUMN refund_pending TINYINT(1) NOT NULL DEFAULT 0;";
+                    await alterCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Ignore if column already exists
+                }
             }).ConfigureAwait(false);
         }
 
@@ -501,7 +525,7 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
-        public async Task<bool> HasRewardEventAsync(string eventKey)
+        public async Task<bool> TryRecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime utc)
         {
             if (string.IsNullOrEmpty(eventKey)) return false;
             return await Task.Run(async () =>
@@ -509,17 +533,56 @@ namespace KizShop.Storage
                 using var conn = new MySqlConnection(_connectionString);
                 await conn.OpenAsync().ConfigureAwait(false);
 
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT 1 FROM kiz_reward_events WHERE event_key = @k LIMIT 1;";
-                cmd.Parameters.AddWithValue("@k", eventKey);
-                var res = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
-                return res != null;
+                try
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        INSERT INTO kiz_reward_events (event_key, boss_name, pool, timestamp)
+                        VALUES (@k, @b, @p, @t);
+                    ";
+                    cmd.Parameters.AddWithValue("@k", eventKey);
+                    cmd.Parameters.AddWithValue("@b", bossName ?? string.Empty);
+                    cmd.Parameters.AddWithValue("@p", pool.Cents);
+                    cmd.Parameters.AddWithValue("@t", utc);
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    return true;
+                }
+                catch (MySqlException ex) when (ex.Number == 1062 || ex.Message.IndexOf("Duplicate", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return false;
+                }
             }).ConfigureAwait(false);
         }
 
-        public async Task RecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime timestampUtc)
+        public async Task<BossRewardEventEntry> GetRewardEventAsync(string eventKey)
         {
-            if (string.IsNullOrEmpty(eventKey)) return;
+            if (string.IsNullOrEmpty(eventKey)) return null;
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT event_key, boss_name, pool, timestamp FROM kiz_reward_events WHERE event_key = @k LIMIT 1;";
+                cmd.Parameters.AddWithValue("@k", eventKey);
+
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                if (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    return new BossRewardEventEntry
+                    {
+                        EventKey = reader.GetString(0),
+                        BossName = reader.GetString(1),
+                        Pool = Money.FromCents(reader.GetInt64(2)),
+                        TimestampUtc = reader.GetDateTime(3)
+                    };
+                }
+                return null;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task RecordRewardPayoutAsync(string eventKey, ulong steamId, Money amount, string status, DateTime utc)
+        {
             await Task.Run(async () =>
             {
                 using var conn = new MySqlConnection(_connectionString);
@@ -527,14 +590,61 @@ namespace KizShop.Storage
 
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = @"
-                    INSERT INTO kiz_reward_events (event_key, boss_name, pool, timestamp)
-                    VALUES (@k, @b, @p, @t)
-                    ON DUPLICATE KEY UPDATE boss_name = @b, pool = @p, timestamp = @t;
+                    INSERT INTO kiz_reward_payouts (event_key, steam_id, amount, status, created_utc)
+                    VALUES (@k, @s, @a, @st, @c);
                 ";
-                cmd.Parameters.AddWithValue("@k", eventKey);
-                cmd.Parameters.AddWithValue("@b", bossName ?? string.Empty);
-                cmd.Parameters.AddWithValue("@p", pool.Cents);
-                cmd.Parameters.AddWithValue("@t", timestampUtc);
+                cmd.Parameters.AddWithValue("@k", eventKey ?? string.Empty);
+                cmd.Parameters.AddWithValue("@s", steamId);
+                cmd.Parameters.AddWithValue("@a", amount.Cents);
+                cmd.Parameters.AddWithValue("@st", status ?? "Unpaid");
+                cmd.Parameters.AddWithValue("@c", utc);
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<RewardPayoutEntry>> GetUnpaidRewardPayoutsAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT id, event_key, steam_id, amount, status, created_utc
+                    FROM kiz_reward_payouts
+                    WHERE status != 'Paid'
+                    ORDER BY id ASC;
+                ";
+
+                var list = new List<RewardPayoutEntry>();
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    list.Add(new RewardPayoutEntry
+                    {
+                        Id = reader.GetInt32(0),
+                        EventKey = reader.GetString(1),
+                        SteamId = (ulong)reader.GetInt64(2),
+                        Amount = Money.FromCents(reader.GetInt64(3)),
+                        Status = reader.GetString(4),
+                        CreatedUtc = reader.GetDateTime(5)
+                    });
+                }
+                return list;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task MarkRewardPayoutPaidAsync(int id, DateTime utc)
+        {
+            await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE kiz_reward_payouts SET status = 'Paid' WHERE id = @id;";
+                cmd.Parameters.AddWithValue("@id", id);
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
@@ -572,27 +682,52 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
-        public async Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc)
+        public async Task UpdateItemPricePressureAsync(ushort itemId, decimal sellDelta, decimal buyDelta, DateTime nowUtc, decimal recoveryPerHour)
         {
             await Task.Run(async () =>
             {
                 using var conn = new MySqlConnection(_connectionString);
                 await conn.OpenAsync().ConfigureAwait(false);
 
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO kiz_item_prices (item_id, sell_pressure, buy_pressure, last_updated)
-                    VALUES (@id, GREATEST(0, @sp), GREATEST(0, @bp), @lu)
-                    ON DUPLICATE KEY UPDATE
-                        sell_pressure = GREATEST(0, sell_pressure + @sp),
-                        buy_pressure = GREATEST(0, buy_pressure + @bp),
-                        last_updated = @lu;
-                ";
-                cmd.Parameters.AddWithValue("@id", itemId);
-                cmd.Parameters.AddWithValue("@sp", sellDelta);
-                cmd.Parameters.AddWithValue("@bp", buyDelta);
-                cmd.Parameters.AddWithValue("@lu", nowUtc);
-                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                decimal curSell = 0;
+                decimal curBuy = 0;
+                DateTime lastUpdated = DateTime.MinValue;
+
+                using (var selCmd = conn.CreateCommand())
+                {
+                    selCmd.CommandText = "SELECT sell_pressure, buy_pressure, last_updated FROM kiz_item_prices WHERE item_id = @id LIMIT 1;";
+                    selCmd.Parameters.AddWithValue("@id", itemId);
+                    using var reader = await selCmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    if (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        curSell = reader.GetDecimal(0);
+                        curBuy = reader.GetDecimal(1);
+                        lastUpdated = reader.GetDateTime(2);
+                    }
+                }
+
+                decimal recSell = PriceCalculator.ComputeRecoveredPressure(curSell, lastUpdated, nowUtc, recoveryPerHour);
+                decimal recBuy = PriceCalculator.ComputeRecoveredPressure(curBuy, lastUpdated, nowUtc, recoveryPerHour);
+
+                var newSell = Math.Max(0m, recSell + sellDelta);
+                var newBuy = Math.Max(0m, recBuy + buyDelta);
+
+                using (var upsertCmd = conn.CreateCommand())
+                {
+                    upsertCmd.CommandText = @"
+                        INSERT INTO kiz_item_prices (item_id, sell_pressure, buy_pressure, last_updated)
+                        VALUES (@id, @sp, @bp, @lu)
+                        ON DUPLICATE KEY UPDATE
+                            sell_pressure = @sp,
+                            buy_pressure = @bp,
+                            last_updated = @lu;
+                    ";
+                    upsertCmd.Parameters.AddWithValue("@id", itemId);
+                    upsertCmd.Parameters.AddWithValue("@sp", newSell);
+                    upsertCmd.Parameters.AddWithValue("@bp", newBuy);
+                    upsertCmd.Parameters.AddWithValue("@lu", nowUtc);
+                    await upsertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
             }).ConfigureAwait(false);
         }
 
@@ -626,8 +761,8 @@ namespace KizShop.Storage
 
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = @"
-                    INSERT INTO kiz_bounties (placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc)
-                    VALUES (@p, @t, @e, @n, @c);
+                    INSERT INTO kiz_bounties (placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc, refund_pending)
+                    VALUES (@p, @t, @e, @n, @c, 0);
                     SELECT LAST_INSERT_ID();
                 ";
                 cmd.Parameters.AddWithValue("@p", placerSteamId);
@@ -641,6 +776,57 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
+        public async Task<(bool Created, Money CurrentTotal)> CreateBountyIfWithinLimitAsync(
+            ulong placerSteamId,
+            ulong targetSteamId,
+            Money escrowAmount,
+            Money netAmount,
+            DateTime createdUtc,
+            Money maxTotalNet)
+        {
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+                long currentTotalCents = 0;
+
+                using (var sumCmd = conn.CreateCommand())
+                {
+                    sumCmd.Transaction = tx;
+                    sumCmd.CommandText = "SELECT COALESCE(SUM(net_cents), 0) FROM kiz_bounties WHERE target_steam_id = @t AND refund_pending = 0 FOR UPDATE;";
+                    sumCmd.Parameters.AddWithValue("@t", targetSteamId);
+                    var res = await sumCmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    currentTotalCents = Convert.ToInt64(res);
+                }
+
+                if (maxTotalNet.Cents > 0 && currentTotalCents + netAmount.Cents > maxTotalNet.Cents)
+                {
+                    await tx.CommitAsync().ConfigureAwait(false);
+                    return (false, Money.FromCents(currentTotalCents));
+                }
+
+                using (var insertCmd = conn.CreateCommand())
+                {
+                    insertCmd.Transaction = tx;
+                    insertCmd.CommandText = @"
+                        INSERT INTO kiz_bounties (placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc, refund_pending)
+                        VALUES (@p, @t, @e, @n, @c, 0);
+                    ";
+                    insertCmd.Parameters.AddWithValue("@p", placerSteamId);
+                    insertCmd.Parameters.AddWithValue("@t", targetSteamId);
+                    insertCmd.Parameters.AddWithValue("@e", escrowAmount.Cents);
+                    insertCmd.Parameters.AddWithValue("@n", netAmount.Cents);
+                    insertCmd.Parameters.AddWithValue("@c", createdUtc);
+                    await insertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+
+                await tx.CommitAsync().ConfigureAwait(false);
+                return (true, Money.FromCents(currentTotalCents + netAmount.Cents));
+            }).ConfigureAwait(false);
+        }
+
         public async Task<List<BountyEntry>> GetActiveBountiesAsync(int limit = 50)
         {
             return await Task.Run(async () =>
@@ -650,8 +836,9 @@ namespace KizShop.Storage
 
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = @"
-                    SELECT id, placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc
+                    SELECT id, placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc, refund_pending
                     FROM kiz_bounties
+                    WHERE refund_pending = 0
                     ORDER BY net_cents DESC
                     LIMIT @lim;
                 ";
@@ -668,7 +855,8 @@ namespace KizShop.Storage
                         TargetSteamId = (ulong)reader.GetInt64(2),
                         EscrowAmount = Money.FromCents(reader.GetInt64(3)),
                         NetAmount = Money.FromCents(reader.GetInt64(4)),
-                        CreatedUtc = reader.GetDateTime(5)
+                        CreatedUtc = reader.GetDateTime(5),
+                        RefundPending = reader.GetBoolean(6)
                     });
                 }
                 return list;
@@ -683,7 +871,7 @@ namespace KizShop.Storage
                 await conn.OpenAsync().ConfigureAwait(false);
 
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT COALESCE(SUM(net_cents), 0) FROM kiz_bounties WHERE target_steam_id = @t;";
+                cmd.CommandText = "SELECT COALESCE(SUM(net_cents), 0) FROM kiz_bounties WHERE target_steam_id = @t AND refund_pending = 0;";
                 cmd.Parameters.AddWithValue("@t", targetSteamId);
 
                 var res = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
@@ -691,7 +879,7 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
-        public async Task<Money> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId)
+        public async Task<(List<BountyEntry> ClaimedBounties, Money TotalAmount)> ClaimBountiesAsync(ulong targetSteamId, ulong killerSteamId)
         {
             return await Task.Run(async () =>
             {
@@ -699,34 +887,55 @@ namespace KizShop.Storage
                 await conn.OpenAsync().ConfigureAwait(false);
 
                 using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+                var list = new List<BountyEntry>();
                 long totalCents = 0;
 
-                using (var sumCmd = conn.CreateCommand())
+                using (var selCmd = conn.CreateCommand())
                 {
-                    sumCmd.Transaction = tx;
-                    sumCmd.CommandText = "SELECT COALESCE(SUM(net_cents), 0) FROM kiz_bounties WHERE target_steam_id = @t AND placer_steam_id != @k FOR UPDATE;";
-                    sumCmd.Parameters.AddWithValue("@t", targetSteamId);
-                    sumCmd.Parameters.AddWithValue("@k", killerSteamId);
-                    var res = await sumCmd.ExecuteScalarAsync().ConfigureAwait(false);
-                    totalCents = Convert.ToInt64(res);
+                    selCmd.Transaction = tx;
+                    selCmd.CommandText = @"
+                        SELECT id, placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc, refund_pending
+                        FROM kiz_bounties
+                        WHERE target_steam_id = @t AND placer_steam_id != @k AND refund_pending = 0
+                        FOR UPDATE;
+                    ";
+                    selCmd.Parameters.AddWithValue("@t", targetSteamId);
+                    selCmd.Parameters.AddWithValue("@k", killerSteamId);
+
+                    using var reader = await selCmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        var net = reader.GetInt64(4);
+                        totalCents += net;
+                        list.Add(new BountyEntry
+                        {
+                            Id = reader.GetInt32(0),
+                            PlacerSteamId = (ulong)reader.GetInt64(1),
+                            TargetSteamId = (ulong)reader.GetInt64(2),
+                            EscrowAmount = Money.FromCents(reader.GetInt64(3)),
+                            NetAmount = Money.FromCents(net),
+                            CreatedUtc = reader.GetDateTime(5),
+                            RefundPending = reader.GetBoolean(6)
+                        });
+                    }
                 }
 
-                if (totalCents > 0)
+                if (list.Count > 0)
                 {
                     using var delCmd = conn.CreateCommand();
                     delCmd.Transaction = tx;
-                    delCmd.CommandText = "DELETE FROM kiz_bounties WHERE target_steam_id = @t AND placer_steam_id != @k;";
+                    delCmd.CommandText = "DELETE FROM kiz_bounties WHERE target_steam_id = @t AND placer_steam_id != @k AND refund_pending = 0;";
                     delCmd.Parameters.AddWithValue("@t", targetSteamId);
                     delCmd.Parameters.AddWithValue("@k", killerSteamId);
                     await delCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
 
                 await tx.CommitAsync().ConfigureAwait(false);
-                return Money.FromCents(totalCents);
+                return (list, Money.FromCents(totalCents));
             }).ConfigureAwait(false);
         }
 
-        public async Task<List<BountyEntry>> RefundExpiredBountiesAsync(DateTime cutoffUtc)
+        public async Task<List<BountyEntry>> GetAndMarkExpiredBountiesAsync(DateTime cutoffUtc)
         {
             return await Task.Run(async () =>
             {
@@ -740,9 +949,9 @@ namespace KizShop.Storage
                 {
                     selectCmd.Transaction = tx;
                     selectCmd.CommandText = @"
-                        SELECT id, placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc
+                        SELECT id, placer_steam_id, target_steam_id, escrow_cents, net_cents, created_utc, refund_pending
                         FROM kiz_bounties
-                        WHERE created_utc < @co
+                        WHERE created_utc < @co OR refund_pending = 1
                         FOR UPDATE;
                     ";
                     selectCmd.Parameters.AddWithValue("@co", cutoffUtc);
@@ -757,22 +966,37 @@ namespace KizShop.Storage
                             TargetSteamId = (ulong)reader.GetInt64(2),
                             EscrowAmount = Money.FromCents(reader.GetInt64(3)),
                             NetAmount = Money.FromCents(reader.GetInt64(4)),
-                            CreatedUtc = reader.GetDateTime(5)
+                            CreatedUtc = reader.GetDateTime(5),
+                            RefundPending = true
                         });
                     }
                 }
 
                 if (list.Count > 0)
                 {
-                    using var delCmd = conn.CreateCommand();
-                    delCmd.Transaction = tx;
-                    delCmd.CommandText = "DELETE FROM kiz_bounties WHERE created_utc < @co;";
-                    delCmd.Parameters.AddWithValue("@co", cutoffUtc);
-                    await delCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    using var updateCmd = conn.CreateCommand();
+                    updateCmd.Transaction = tx;
+                    updateCmd.CommandText = "UPDATE kiz_bounties SET refund_pending = 1 WHERE created_utc < @co OR refund_pending = 1;";
+                    updateCmd.Parameters.AddWithValue("@co", cutoffUtc);
+                    await updateCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
 
                 await tx.CommitAsync().ConfigureAwait(false);
                 return list;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task ConfirmBountyRefundAsync(int bountyId)
+        {
+            await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM kiz_bounties WHERE id = @id;";
+                cmd.Parameters.AddWithValue("@id", bountyId);
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
 

@@ -82,6 +82,27 @@
 | `/kizshop removeveh <id>` | | Admin: remove a vehicle from shop | `kizshop.admin` |
 | `/kizshop setvehprice <id> <buy> [sell]` | | Admin: update prices for a vehicle | `kizshop.admin` |
 
+### Shop Categories
+
+Every item in `KizShop.shop.json` belongs to a `Category` (e.g., `Weapons`, `Medical`, `Food`, `General`).
+- **Default Category**: Items from existing or upgraded catalogs default to `"General"` automatically. Vehicles default to `"Vehicles"`.
+- **Browsing by Category**: Players browse categories with `/shop` or list specific category pages with `/shop <category> [page]` (e.g., `/shop Weapons`, `/shop Med`).
+- **Assigning Categories via Command**:
+  Administrators can assign or change an item's category in-game without editing JSON:
+  ```text
+  /kizshop setcategory <id> <category>
+  ```
+  **Examples**:
+  ```text
+  /kizshop setcategory 363 Weapons
+  /kizshop setcategory 15 Medical
+  /kizshop setcategory 14 Food
+  ```
+- **Assigning on Creation**: The category can also be supplied as the last parameter when adding items:
+  ```text
+  /kizshop additem 363 "Maplestrike" 250 100 "" Weapons
+  ```
+
 ### Permissions Summary
 
 | Permission | Description |
