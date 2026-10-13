@@ -123,7 +123,7 @@ namespace KizShop
 
             { "reward_player_kill", "<color=green>+ {0} for eliminating {1}!</color>" },
             { "reward_zombie_kill", "<color=green>+ {0} for zombie kill.</color>" },
-            { "reward_mega_zombie_kill", "<color=gold>+ {0} for MEGA zombie kill!</color>" },
+            { "reward_mega_zombie_kill", "<color=yellow>+ {0} for MEGA zombie kill!</color>" },
             { "reward_playtime", "<color=green>+ {0} playtime income reward!</color>" },
 
             { "kizshop_admin_usage", "Usage: /kizshop <version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>" },
@@ -159,7 +159,7 @@ namespace KizShop
             { "category_not_found", "<color=red>Category '{0}' not found.</color>" },
             { "ambiguous_category", "<color=yellow>Multiple matching categories: {0}. Please be more specific.</color>" },
 
-            { "boss_reward_received", "<color=gold>You received {0} for defeating {1}!</color>" },
+            { "boss_reward_received", "<color=yellow>You received {0} for defeating {1}!</color>" },
 
             { "sell_hand_empty", "<color=red>You are not holding any item in your hands.</color>" },
             { "sell_hand_not_sellable", "<color=red>The item in your hands cannot be sold.</color>" },
@@ -185,13 +185,13 @@ namespace KizShop
             { "bounty_insufficient_funds", "<color=red>You need {0} to place this bounty, but only have {1}.</color>" },
             { "bounty_set_success", "<color=green>Bounty of {0} placed on {1}!</color>" },
             { "bounty_failed", "<color=red>Failed to place bounty, escrow refunded.</color>" },
-            { "bounty_broadcast", "<color=gold>[BOUNTY] {0} placed a bounty of {1} on {2}!</color>" },
+            { "bounty_broadcast", "<color=yellow>[BOUNTY] {0} placed a bounty of {1} on {2}!</color>" },
             { "bounty_list_header", "<color=cyan>--- Active Bounties (Page {0}/{1}) ---</color>" },
             { "bounty_list_entry", "<color=yellow>{0}</color>: <color=green>{1}</color>" },
             { "bounty_list_empty", "No active bounties." },
-            { "bounty_me", "Active bounty on you: <color=gold>{0}</color>" },
-            { "bounty_claimed_killer", "<color=gold>+ {0} bounty claimed for eliminating {1}!</color>" },
-            { "bounty_claimed_broadcast", "<color=gold>[BOUNTY CLAIMED] {0} collected the {1} bounty on {2}!</color>" },
+            { "bounty_me", "Active bounty on you: <color=yellow>{0}</color>" },
+            { "bounty_claimed_killer", "<color=yellow>+ {0} bounty claimed for eliminating {1}!</color>" },
+            { "bounty_claimed_broadcast", "<color=yellow>[BOUNTY CLAIMED] {0} collected the {1} bounty on {2}!</color>" },
 
             { "daily_disabled", "<color=red>Daily rewards are currently disabled.</color>" },
             { "daily_already_claimed", "<color=yellow>You already claimed your daily reward today! Next reset in {0}.</color>" },
@@ -568,9 +568,16 @@ namespace KizShop
 
         private void HandleEnemyDisconnected(SteamPlayer player)
         {
-            if (player != null && player.playerID != null)
+            try
             {
-                CombatTag?.Clear(player.playerID.steamID.m_SteamID);
+                if (player != null && player.playerID != null)
+                {
+                    CombatTag?.Clear(player.playerID.steamID.m_SteamID);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[KizShop] Error in HandleEnemyDisconnected: {ex.Message}");
             }
         }
 

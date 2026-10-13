@@ -532,5 +532,22 @@ namespace KizShop.Tests
             Assert.DoesNotMatch(pattern, "table`name");
             Assert.DoesNotMatch(pattern, "");
         }
+
+        [Fact]
+        public void HandleEnemyDisconnected_DoesNotThrow_OnNullOrInvalidPlayer()
+        {
+            var m = typeof(KizShopPlugin).GetMethod("HandleEnemyDisconnected", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(m);
+
+            // Create uninitialized plugin instance
+            var plugin = (KizShopPlugin)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(KizShopPlugin));
+
+            var ex = Record.Exception(() =>
+            {
+                m.Invoke(plugin, new object[] { null });
+            });
+
+            Assert.Null(ex);
+        }
     }
 }
