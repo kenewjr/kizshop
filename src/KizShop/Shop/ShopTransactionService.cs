@@ -28,6 +28,16 @@ namespace KizShop.Shop
         public string Note { get; set; }
     }
 
+    public class ShopKitTransactionResult
+    {
+        public bool Success { get; set; }
+        public string ErrorKey { get; set; }
+        public object[] ErrorArgs { get; set; }
+        public KitShopEntry KitEntry { get; set; }
+        public Money Price { get; set; }
+        public Money NewBalance { get; set; }
+    }
+
     public class SellAllSummaryResult
     {
         public bool Success { get; set; }
@@ -62,14 +72,15 @@ namespace KizShop.Shop
         private readonly ICombatTagService _combatTagService;
         private readonly IKizStorage _storage;
 
-        private readonly ConcurrentDictionary<ulong, byte> _inFlightLocks = new ConcurrentDictionary<ulong, byte>();
         private readonly ConcurrentDictionary<ulong, DateTime> _vehicleCooldowns = new ConcurrentDictionary<ulong, DateTime>();
+        private readonly ConcurrentDictionary<(ulong, string), DateTime> _kitCooldowns = new ConcurrentDictionary<(ulong, string), DateTime>();
         private readonly ConcurrentDictionary<ulong, SellAllPendingConfirmation> _pendingSellAll = new ConcurrentDictionary<ulong, SellAllPendingConfirmation>();
         private readonly ConcurrentDictionary<ushort, SemaphoreSlim> _priceSemaphores = new ConcurrentDictionary<ushort, SemaphoreSlim>();
 
         public event Action<ulong, ItemShopEntry, int, Money, Money> OnItemPurchased;
         public event Action<ulong, ItemShopEntry, int, Money, Money> OnItemSold;
         public event Action<ulong, VehicleShopEntry, Money, Money> OnVehiclePurchased;
+        public event Action<ulong, KitShopEntry, Money, Money> OnKitPurchased;
 
         public ShopTransactionService(
             ShopService shopService,
@@ -89,6 +100,20 @@ namespace KizShop.Shop
             _clock = clock ?? SystemClock.Instance;
             _combatTagService = combatTagService;
             _storage = storage;
+        }
+
+        public void ClearPlayerState(ulong steamId)
+        {
+            _pendingSellAll.TryRemove(steamId, out _);
+            _vehicleCooldowns.TryRemove(steamId, out _);
+            foreach (var key in _kitCooldowns.Keys)
+            {
+                if (key.Item1 == steamId)
+                {
+                    _kitCooldowns.TryRemove(key, out _);
+                }
+            }
+            PlayerLock.Release(steamId);
         }
 
         private bool IsCombatBlocked(ulong steamId, bool blocksAction, Func<string, bool> hasPermission, bool isAdmin, out int secondsLeft)
@@ -268,7 +293,7 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "invalid_money_amount", ErrorArgs = new object[] { "Amount exceeds limits" } };
             }
 
-            if (!_inFlightLocks.TryAdd(steamId, 1))
+            if (!PlayerLock.TryAcquire(steamId))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
@@ -427,7 +452,7 @@ namespace KizShop.Shop
             }
             finally
             {
-                _inFlightLocks.TryRemove(steamId, out _);
+                PlayerLock.Release(steamId);
             }
         }
 
@@ -535,7 +560,7 @@ namespace KizShop.Shop
 
             var totalPayout = Money.FromCents(totalPayoutCents);
 
-            if (!_inFlightLocks.TryAdd(steamId, 1))
+            if (!PlayerLock.TryAcquire(steamId))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
@@ -623,7 +648,7 @@ namespace KizShop.Shop
             }
             finally
             {
-                _inFlightLocks.TryRemove(steamId, out _);
+                PlayerLock.Release(steamId);
             }
         }
 
@@ -679,7 +704,7 @@ namespace KizShop.Shop
             decimal finalDec = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio;
             var payout = Money.FromCents((long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero));
 
-            if (!_inFlightLocks.TryAdd(steamId, 1))
+            if (!PlayerLock.TryAcquire(steamId))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
@@ -753,7 +778,7 @@ namespace KizShop.Shop
             }
             finally
             {
-                _inFlightLocks.TryRemove(steamId, out _);
+                PlayerLock.Release(steamId);
             }
         }
 
@@ -961,7 +986,7 @@ namespace KizShop.Shop
                 };
             }
 
-            if (!_inFlightLocks.TryAdd(steamId, 1))
+            if (!PlayerLock.TryAcquire(steamId))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
@@ -1047,7 +1072,7 @@ namespace KizShop.Shop
             }
             finally
             {
-                _inFlightLocks.TryRemove(steamId, out _);
+                PlayerLock.Release(steamId);
             }
         }
 
@@ -1105,7 +1130,7 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "invalid_money_amount", ErrorArgs = new object[] { moneyErr } };
             }
 
-            if (!_inFlightLocks.TryAdd(steamId, 1))
+            if (!PlayerLock.TryAcquire(steamId))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
@@ -1200,7 +1225,151 @@ namespace KizShop.Shop
             }
             finally
             {
-                _inFlightLocks.TryRemove(steamId, out _);
+                PlayerLock.Release(steamId);
+            }
+        }
+
+        public async Task<ShopKitTransactionResult> BuyKitAsync(
+            ulong steamId,
+            string kitName,
+            Func<string, bool> hasPermission,
+            bool isAdmin = false)
+        {
+            if (string.IsNullOrWhiteSpace(kitName))
+            {
+                return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_not_found" };
+            }
+
+            var kit = _shopService.ResolveKit(kitName, enabledOnly: true);
+            if (kit == null)
+            {
+                return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_not_found", ErrorArgs = new object[] { kitName } };
+            }
+
+            if (!kit.Enabled)
+            {
+                return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_disabled" };
+            }
+
+            if (!string.IsNullOrEmpty(kit.Permission) && !isAdmin && (hasPermission == null || !hasPermission(kit.Permission)))
+            {
+                return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_no_permission" };
+            }
+
+            var cfg = _configProvider();
+            if (IsCombatBlocked(steamId, cfg.CombatTagBlocksBuy, hasPermission, isAdmin, out int combatSecs))
+            {
+                return new ShopKitTransactionResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { combatSecs } };
+            }
+
+            var coolKey = (steamId, kit.Name.ToLowerInvariant());
+            if (kit.CooldownSeconds > 0 && !isAdmin && _kitCooldowns.TryGetValue(coolKey, out var lastBuy))
+            {
+                var elapsed = (_clock.UtcNow - lastBuy).TotalSeconds;
+                if (elapsed < kit.CooldownSeconds)
+                {
+                    int rem = (int)Math.Ceiling(kit.CooldownSeconds - elapsed);
+                    return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_cooldown", ErrorArgs = new object[] { rem } };
+                }
+            }
+
+            if (!Money.TryFromDecimal(kit.BuyPrice, cfg.MaxTransactionAmount, out var kitPrice, out var moneyErr))
+            {
+                return new ShopKitTransactionResult { Success = false, ErrorKey = "invalid_money_amount", ErrorArgs = new object[] { moneyErr } };
+            }
+
+            if (!PlayerLock.TryAcquire(steamId))
+            {
+                return new ShopKitTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
+            }
+
+            try
+            {
+                if (kit.Items != null)
+                {
+                    foreach (var ki in kit.Items)
+                    {
+                        var spaceRes = await _inventoryGateway.CheckSpaceAsync(steamId, ki.Id, ki.Amount).ConfigureAwait(false);
+                        if (!spaceRes.Fits)
+                        {
+                            return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_no_space" };
+                        }
+                    }
+                }
+
+                var withdrawRes = await _economyService.TryWithdrawAsync(steamId, kitPrice, $"KitBuy:{kit.Name}").ConfigureAwait(false);
+                if (!withdrawRes.Success)
+                {
+                    var curBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                    return new ShopKitTransactionResult
+                    {
+                        Success = false,
+                        ErrorKey = "kit_insufficient_funds",
+                        ErrorArgs = new object[] { kitPrice, kit.DisplayName ?? kit.Name, curBal }
+                    };
+                }
+
+                var deliveredItems = new List<SDG.Unturned.Item>();
+                bool deliveryFailed = false;
+                string failReason = "kit_delivery_failed";
+                object[] failArgs = null;
+                bool autoEquip = cfg.AutoEquipPurchasedItems;
+
+                if (kit.Items != null)
+                {
+                    foreach (var ki in kit.Items)
+                    {
+                        for (int i = 0; i < ki.Amount; i++)
+                        {
+                            var item = await _inventoryGateway.CreateItemAsync(ki.Id).ConfigureAwait(false);
+                            if (item == null)
+                            {
+                                deliveryFailed = true;
+                                failReason = "buy_item_unknown";
+                                failArgs = new object[] { ki.Id };
+                                break;
+                            }
+                            bool added = await _inventoryGateway.TryAddItemAsync(steamId, item, autoEquip).ConfigureAwait(false);
+                            if (!added)
+                            {
+                                deliveryFailed = true;
+                                failReason = "kit_no_space";
+                                break;
+                            }
+                            deliveredItems.Add(item);
+                        }
+                        if (deliveryFailed) break;
+                    }
+                }
+
+                if (deliveryFailed)
+                {
+                    foreach (var d in deliveredItems)
+                    {
+                        await _inventoryGateway.RemoveItemByReferenceAsync(steamId, d).ConfigureAwait(false);
+                    }
+                    await _economyService.DepositAsync(steamId, kitPrice, $"KitRefund:{kit.Name}", ignoreMaxBalance: true).ConfigureAwait(false);
+                    return new ShopKitTransactionResult { Success = false, ErrorKey = failReason, ErrorArgs = failArgs };
+                }
+
+                if (kit.CooldownSeconds > 0)
+                {
+                    _kitCooldowns[coolKey] = _clock.UtcNow;
+                }
+
+                OnKitPurchased?.Invoke(steamId, kit, kitPrice, withdrawRes.NewBalance);
+
+                return new ShopKitTransactionResult
+                {
+                    Success = true,
+                    KitEntry = kit,
+                    Price = kitPrice,
+                    NewBalance = withdrawRes.NewBalance
+                };
+            }
+            finally
+            {
+                PlayerLock.Release(steamId);
             }
         }
     }

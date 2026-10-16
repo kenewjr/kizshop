@@ -31,14 +31,31 @@ namespace KizShop.Commands
                 }
 
                 int amount = 1;
-                if (command.Length >= 2 && (!int.TryParse(command[1], out amount) || amount <= 0))
+                string query;
+                string lastArg = command[command.Length - 1];
+
+                if (command.Length >= 2 && int.TryParse(lastArg, out var parsedAmt))
+                {
+                    if (parsedAmt <= 0)
+                    {
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            KizChat.Say(caller, plugin.Translate("buy_invalid_amount"), UnityEngine.Color.red));
+                        return;
+                    }
+                    amount = parsedAmt;
+                    query = string.Join(" ", command, 0, command.Length - 1).Trim();
+                }
+                else
+                {
+                    query = string.Join(" ", command).Trim();
+                }
+
+                if (string.IsNullOrEmpty(query))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
                         KizChat.Say(caller, plugin.Translate("buy_usage"), UnityEngine.Color.yellow));
                     return;
                 }
-
-                string query = command[0];
                 var result = await plugin.Transactions.ExecuteBuyAsync(
                     player.CSteamID.m_SteamID,
                     query,

@@ -121,6 +121,7 @@ namespace KizShop.Storage
 
                     var accounts = _db.GetCollection<AccountDoc>("accounts");
                     accounts.EnsureIndex(x => x.SteamId, true);
+                    accounts.EnsureIndex(x => x.BalanceCents);
 
                     var txs = _db.GetCollection<TransactionDoc>("transactions");
                     txs.EnsureIndex(x => x.SteamId);
@@ -136,6 +137,11 @@ namespace KizShop.Storage
                     bounties.EnsureIndex(x => x.TargetSteamId);
                     bounties.EnsureIndex(x => x.PlacerSteamId);
                     bounties.EnsureIndex(x => x.CreatedUtc);
+                    bounties.EnsureIndex(x => x.RefundPending);
+
+                    var payouts = _db.GetCollection<RewardPayoutDoc>("reward_payouts");
+                    payouts.EnsureIndex(x => x.EventKey);
+                    payouts.EnsureIndex(x => x.Status);
 
                     var dailies = _db.GetCollection<DailyClaimDoc>("daily_claims");
                     dailies.EnsureIndex(x => x.SteamId, true);
@@ -455,6 +461,9 @@ namespace KizShop.Storage
                 lock (_dbLock)
                 {
                     var coll = _db.GetCollection<RewardPayoutDoc>("reward_payouts");
+                    var existing = coll.FindOne(x => x.EventKey == eventKey && x.SteamId == (long)steamId);
+                    if (existing != null) return;
+
                     coll.Insert(new RewardPayoutDoc
                     {
                         EventKey = eventKey,
@@ -474,7 +483,7 @@ namespace KizShop.Storage
                 lock (_dbLock)
                 {
                     var coll = _db.GetCollection<RewardPayoutDoc>("reward_payouts");
-                    var docs = coll.Find(x => x.Status == "Pending").ToList();
+                    var docs = coll.Find(x => x.Status != "Paid").ToList();
                     var list = new List<RewardPayoutEntry>(docs.Count);
                     foreach (var d in docs)
                     {
@@ -765,6 +774,20 @@ namespace KizShop.Storage
                 {
                     var coll = _db.GetCollection<BountyDoc>("bounties");
                     coll.Delete(bountyId);
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<bool> CanClaimDailyAsync(ulong steamId, int currentDayIndex)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<DailyClaimDoc>("daily_claims");
+                    var doc = coll.FindById((long)steamId);
+                    if (doc == null) return true;
+                    return doc.LastClaimDayIndex != currentDayIndex;
                 }
             }).ConfigureAwait(false);
         }

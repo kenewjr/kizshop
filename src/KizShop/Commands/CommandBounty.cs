@@ -65,8 +65,6 @@ namespace KizShop.Commands
             });
         }
 
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _inFlightLocks = new System.Collections.Concurrent.ConcurrentDictionary<ulong, byte>();
-
         private async Task HandleBountySetAsync(IRocketPlayer caller, string[] command)
         {
             var plugin = KizShopPlugin.Instance;
@@ -87,7 +85,7 @@ namespace KizShop.Commands
                 placerName = uPlacer.CharacterName;
             }
 
-            if (placerSteamId != 0 && !_inFlightLocks.TryAdd(placerSteamId, 1))
+            if (placerSteamId != 0 && !PlayerLock.TryAcquire(placerSteamId))
             {
                 plugin.Dispatcher.QueueOnMainThread(() =>
                     KizChat.Say(caller, plugin.Translate("transaction_in_flight"), UnityEngine.Color.red));
@@ -96,8 +94,8 @@ namespace KizShop.Commands
 
             try
             {
-                string targetArg = command[1];
-                string amountArg = command[2];
+                string amountArg = command[command.Length - 1];
+                string targetArg = string.Join(" ", command, 1, command.Length - 2).Trim();
 
                 if (!decimal.TryParse(amountArg, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal amountDec) || amountDec < cfg.BountyMinAmount)
                 {
@@ -225,7 +223,7 @@ namespace KizShop.Commands
             {
                 if (placerSteamId != 0)
                 {
-                    _inFlightLocks.TryRemove(placerSteamId, out _);
+                    PlayerLock.Release(placerSteamId);
                 }
             }
         }

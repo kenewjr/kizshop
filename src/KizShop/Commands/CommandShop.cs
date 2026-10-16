@@ -60,11 +60,17 @@ namespace KizShop.Commands
                         return;
                     }
 
-                    string searchText = command[1];
+                    string searchText;
                     int searchPage = 1;
-                    if (command.Length >= 3 && int.TryParse(command[2], out int p))
+                    string lastArg = command[command.Length - 1];
+                    if (command.Length >= 3 && int.TryParse(lastArg, out int p) && p > 0)
                     {
                         searchPage = p;
+                        searchText = string.Join(" ", command, 1, command.Length - 2).Trim();
+                    }
+                    else
+                    {
+                        searchText = string.Join(" ", command, 1, command.Length - 1).Trim();
                     }
 
                     var (searchEntries, searchPages, totalMatches) = plugin.Shop.Search(searchText, searchPage, pageSize);
@@ -81,12 +87,19 @@ namespace KizShop.Commands
 
                 // 4. /shop <category> [page]
                 int categoryPage = 1;
-                if (command.Length >= 2 && int.TryParse(command[1], out int cp))
+                string categoryArg;
+                string lastCatArg = command[command.Length - 1];
+                if (command.Length >= 2 && int.TryParse(lastCatArg, out int cp) && cp > 0)
                 {
                     categoryPage = cp;
+                    categoryArg = string.Join(" ", command, 0, command.Length - 1).Trim();
+                }
+                else
+                {
+                    categoryArg = string.Join(" ", command).Trim();
                 }
 
-                if (!plugin.Shop.ResolveCategory(firstArg, out string resolvedCategory, out var candidates))
+                if (!plugin.Shop.ResolveCategory(categoryArg, out string resolvedCategory, out var candidates))
                 {
                     if (candidates != null && candidates.Count > 1)
                     {
@@ -97,7 +110,7 @@ namespace KizShop.Commands
                     }
 
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        KizChat.Say(caller, plugin.Translate("category_not_found", firstArg), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("category_not_found", categoryArg), UnityEngine.Color.red));
                     return;
                 }
 

@@ -42,6 +42,7 @@ namespace KizShop.Storage
         Task ConfirmBountyRefundAsync(int bountyId);
 
         // Daily Claims
+        Task<bool> CanClaimDailyAsync(ulong steamId, int currentDayIndex);
         Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc);
         Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak);
     }

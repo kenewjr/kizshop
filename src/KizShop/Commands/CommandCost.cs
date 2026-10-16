@@ -28,7 +28,7 @@ namespace KizShop.Commands
                     return;
                 }
 
-                string query = command[0];
+                string query = string.Join(" ", command).Trim();
                 var itemLookup = plugin.Shop.ResolveItem(query);
 
                 if (itemLookup.Status == LookupStatus.Ambiguous)

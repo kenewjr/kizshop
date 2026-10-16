@@ -134,8 +134,34 @@ namespace KizShop.Commands
                 }
 
                 // 3. Regular item sell: /sell <item> [amount|all]
-                string query = command[0];
-                string amountArg = command.Length >= 2 ? command[1] : "1";
+                string query;
+                string amountArg = "1";
+
+                if (command.Length >= 2)
+                {
+                    string lastArg = command[command.Length - 1];
+                    if (lastArg.Equals("all", StringComparison.OrdinalIgnoreCase) ||
+                        int.TryParse(lastArg, out _))
+                    {
+                        amountArg = lastArg;
+                        query = string.Join(" ", command, 0, command.Length - 1).Trim();
+                    }
+                    else
+                    {
+                        query = string.Join(" ", command).Trim();
+                    }
+                }
+                else
+                {
+                    query = command[0].Trim();
+                }
+
+                if (string.IsNullOrEmpty(query))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("sell_usage"), UnityEngine.Color.yellow));
+                    return;
+                }
 
                 var result = await plugin.Transactions.ExecuteSellAsync(
                     steamId,

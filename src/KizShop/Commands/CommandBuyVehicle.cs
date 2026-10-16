@@ -30,7 +30,7 @@ namespace KizShop.Commands
                     return;
                 }
 
-                string query = command[0];
+                string query = string.Join(" ", command).Trim();
                 var result = await plugin.Transactions.ExecuteBuyVehicleAsync(
                     player.CSteamID.m_SteamID,
                     query,

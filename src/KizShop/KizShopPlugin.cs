@@ -75,7 +75,7 @@ namespace KizShop
             { "baltop_entry", "<color=yellow>#{0}</color> {1}: <color=green>{2}</color>" },
             { "baltop_empty", "No accounts found." },
 
-            { "eco_usage", "Usage: /eco <give|take|set> <player|steamid> <amount>" },
+            { "eco_usage", "Usage: /eco <give|take|set> <player|steamid> <amount> | /eco giveaway <amount>" },
             { "eco_success", "<color=green>Updated {0}'s balance. New balance: {1}.</color>" },
             { "eco_insufficient_funds", "<color=red>{0} only has {1}, cannot deduct amount.</color>" },
 
@@ -121,12 +121,26 @@ namespace KizShop
             { "vehicle_spawn_failed", "<color=red>Vehicle failed to spawn ({0}). Funds were refunded.</color>" },
             { "vehicle_success", "<color=green>Successfully purchased and spawned {0} for {1}!</color>" },
 
+            { "kit_list_header", "<color=cyan>--- Available KizShop Kits ---</color>" },
+            { "kit_list_entry", "<color=yellow>{0}</color> ({1}) - <color=green>{2}</color>: {3}" },
+            { "kit_list_footer", "Use /buykit <name> or /kit <name> to purchase." },
+            { "kit_none_available", "<color=yellow>No kits are currently available in the shop.</color>" },
+            { "kit_not_found", "<color=red>Kit '{0}' not found in shop.</color>" },
+            { "kit_disabled", "<color=red>This kit is currently disabled.</color>" },
+            { "kit_no_permission", "<color=red>You do not have permission to purchase this kit.</color>" },
+            { "kit_cooldown", "<color=red>You must wait {0}s before purchasing this kit again.</color>" },
+            { "kit_insufficient_funds", "<color=red>You need {0} to purchase {1}, but have {2}.</color>" },
+            { "kit_no_space", "<color=red>You do not have enough inventory space to receive this kit.</color>" },
+            { "kit_delivery_failed", "<color=red>Failed to deliver kit items into your inventory. Payment was refunded.</color>" },
+            { "kit_success", "<color=green>Successfully purchased {0} for {1}! New balance: {2}.</color>" },
+            { "daily_reminder", "<color=yellow>⭐ Your daily login reward is ready! Type <color=green>/daily</color> to claim it!</color>" },
+
             { "reward_player_kill", "<color=green>+ {0} for eliminating {1}!</color>" },
             { "reward_zombie_kill", "<color=green>+ {0} for zombie kill.</color>" },
             { "reward_mega_zombie_kill", "<color=yellow>+ {0} for MEGA zombie kill!</color>" },
             { "reward_playtime", "<color=green>+ {0} playtime income reward!</color>" },
 
-            { "kizshop_admin_usage", "Usage: /kizshop <version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice>" },
+            { "kizshop_admin_usage", "Usage: /kizshop <version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway>" },
             { "kizshop_additem_usage", "Usage: /kizshop additem <id> \"<name>\" <buyPrice> [sellPrice] [permission]" },
             { "kizshop_removeitem_usage", "Usage: /kizshop removeitem <id>" },
             { "kizshop_setitemprice_usage", "Usage: /kizshop setitemprice <id> <buyPrice> [sellPrice]" },
@@ -196,7 +210,13 @@ namespace KizShop
             { "daily_disabled", "<color=red>Daily rewards are currently disabled.</color>" },
             { "daily_already_claimed", "<color=yellow>You already claimed your daily reward today! Next reset in {0}.</color>" },
             { "daily_payout_failed", "<color=red>Failed to deposit daily reward. Please contact an admin.</color>" },
-            { "daily_success", "<color=green>Claimed daily reward: {0}! Current streak: {1}/{2} days.</color>" }
+            { "daily_success", "<color=green>Claimed daily reward: {0}! Current streak: {1}/{2} days.</color>" },
+
+            { "giveaway_usage", "Usage: /giveaway <amount>" },
+            { "giveaway_invalid_amount", "<color=red>Invalid giveaway amount: {0}</color>" },
+            { "giveaway_no_players", "<color=yellow>No online players found to receive giveaway.</color>" },
+            { "giveaway_broadcast", "<color=yellow>[GIVEAWAY] {0} gave {1} to all online players ({2} players)!</color>" },
+            { "giveaway_success", "<color=green>Successfully distributed {0} to {1} online players.</color>" }
         };
 
         protected override void Load()
@@ -211,6 +231,7 @@ namespace KizShop
             try
             {
                 Configuration.Instance.Normalize();
+                MigrateTranslationsOnDisk();
 
                 // 1. Initialize Storage
                 try
@@ -298,10 +319,20 @@ namespace KizShop
                     }
                 };
 
+                Transactions.OnKitPurchased += (steamId, entry, price, newBal) =>
+                {
+                    _ = DiscordWebhook?.SendPurchaseAlertAsync(steamId, $"Kit {entry.DisplayName ?? entry.Name}", 1, price, newBal);
+                    if (price.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
+                    {
+                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "KitPurchase", price, entry.DisplayName ?? entry.Name);
+                    }
+                };
+
                 // 5. Hook Game Events
                 UnturnedPlayerEvents.OnPlayerDeath += HandlePlayerDeath;
                 UnturnedPlayerEvents.OnPlayerUpdateStat += HandlePlayerStat;
                 DamageTool.damagePlayerRequested += HandleDamagePlayerRequested;
+                Provider.onEnemyConnected += HandleEnemyConnected;
                 Provider.onEnemyDisconnected += HandleEnemyDisconnected;
                 Level.onPostLevelLoaded += HandlePostLevelLoaded;
 
@@ -337,6 +368,7 @@ namespace KizShop
             UnturnedPlayerEvents.OnPlayerDeath -= HandlePlayerDeath;
             UnturnedPlayerEvents.OnPlayerUpdateStat -= HandlePlayerStat;
             DamageTool.damagePlayerRequested -= HandleDamagePlayerRequested;
+            Provider.onEnemyConnected -= HandleEnemyConnected;
             Provider.onEnemyDisconnected -= HandleEnemyDisconnected;
 
             if (DiscordBot != null)
@@ -444,14 +476,44 @@ namespace KizShop
             return Translate("currency_format", Configuration.Instance.CurrencySymbol, amount.ToDecimal(), Configuration.Instance.CurrencyName);
         }
 
+        public void MigrateTranslationsOnDisk(string directoryPath = null)
+        {
+            try
+            {
+                string targetDir = directoryPath ?? Directory;
+                if (string.IsNullOrEmpty(targetDir) || !System.IO.Directory.Exists(targetDir)) return;
+
+                foreach (var file in System.IO.Directory.GetFiles(targetDir, "*.translation.xml"))
+                {
+                    string content = System.IO.File.ReadAllText(file);
+                    if (content.IndexOf("gold", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        string updated = System.Text.RegularExpressions.Regex.Replace(
+                            content,
+                            @"(&lt;|<)color\s*=\s*['""]?gold['""]?(&gt;|>)",
+                            "$1color=yellow$2",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                        if (content != updated)
+                        {
+                            System.IO.File.WriteAllText(file, updated);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore migration exceptions during headless or permission-restricted environments
+            }
+        }
+
         private void HandlePlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, CSteamID murderer)
         {
-            if (player != null)
-            {
-                CombatTag?.Clear(player.CSteamID.m_SteamID);
-            }
+            if (player == null || player.Player == null) return;
 
-            if (murderer == CSteamID.Nil || (player != null && murderer == player.CSteamID)) return; // No suicide
+            CombatTag?.Clear(player.CSteamID.m_SteamID);
+
+            if (murderer == CSteamID.Nil || murderer == player.CSteamID) return; // No suicide
 
             var killer = UnturnedPlayer.FromCSteamID(murderer);
             if (killer == null || killer.Player == null) return;
@@ -558,12 +620,60 @@ namespace KizShop
 
             Dispatcher.QueueOnMainThread(() =>
             {
-                if (life == null) return;
-                if (life.isDead || life.health < healthBefore)
+                try
                 {
-                    CombatTag?.Tag(attackerSteamId, victimSteamId);
+                    if (life == null) return;
+                    if (life.isDead || life.health < healthBefore)
+                    {
+                        CombatTag?.Tag(attackerSteamId, victimSteamId);
+                    }
                 }
+                catch { }
             });
+        }
+
+        private void HandleEnemyConnected(SteamPlayer player)
+        {
+            try
+            {
+                if (player != null && player.playerID != null)
+                {
+                    ulong steamId = player.playerID.steamID.m_SteamID;
+                    _ = Economy?.GetBalanceAsync(steamId);
+
+                    if (Configuration.Instance.DailyRewardEnabled && Configuration.Instance.DailyReminderOnJoin && Storage != null)
+                    {
+                        Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await Task.Delay(4000).ConfigureAwait(false);
+                                var clock = Clock;
+                                DateTime nowUtc = clock.UtcNow;
+                                DateTime localNow = nowUtc.AddHours(Configuration.Instance.DailyResetUtcOffsetHours);
+                                int currentDayIndex = (int)(localNow.Date - new DateTime(2000, 1, 1)).TotalDays;
+
+                                if (Storage != null && await Storage.CanClaimDailyAsync(steamId, currentDayIndex).ConfigureAwait(false))
+                                {
+                                    Dispatcher.QueueOnMainThread(() =>
+                                    {
+                                        var uPlayer = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
+                                        if (uPlayer != null)
+                                        {
+                                            KizChat.Say(uPlayer, Translate("daily_reminder"), UnityEngine.Color.yellow);
+                                        }
+                                    });
+                                }
+                            }
+                            catch { }
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[KizShop] Error in HandleEnemyConnected: {ex.Message}");
+            }
         }
 
         private void HandleEnemyDisconnected(SteamPlayer player)
@@ -572,7 +682,11 @@ namespace KizShop
             {
                 if (player != null && player.playerID != null)
                 {
-                    CombatTag?.Clear(player.playerID.steamID.m_SteamID);
+                    ulong steamId = player.playerID.steamID.m_SteamID;
+                    PlayerLock.Release(steamId);
+                    CombatTag?.Clear(steamId);
+                    Economy?.InvalidateCache(steamId);
+                    Transactions?.ClearPlayerState(steamId);
                 }
             }
             catch (Exception ex)
@@ -708,12 +822,20 @@ namespace KizShop
             // Off main thread DB work
             Task.Run(async () =>
             {
-                await Economy.DepositAsync(player.CSteamID.m_SteamID, reward, $"ZombieReward:{stat}").ConfigureAwait(false);
-                Dispatcher.QueueOnMainThread(() =>
+                try
                 {
-                    var formatted = FormatMoney(reward);
-                    KizChat.Say(player, Translate(key, formatted), UnityEngine.Color.green);
-                });
+                    if (Economy == null) return;
+                    await Economy.DepositAsync(player.CSteamID.m_SteamID, reward, $"ZombieReward:{stat}").ConfigureAwait(false);
+                    Dispatcher.QueueOnMainThread(() =>
+                    {
+                        var formatted = FormatMoney(reward);
+                        KizChat.Say(player, Translate(key, formatted), UnityEngine.Color.green);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"[KizShop] Error processing zombie reward: {ex.Message}");
+                }
             });
         }
 
@@ -749,36 +871,53 @@ namespace KizShop
                     }
 
                     // Gather steam IDs on main thread
-                    var steamIds = new System.Collections.Generic.List<ulong>();
-                    Dispatcher.QueueOnMainThread(() =>
+                    var steamIds = await Dispatcher.RunOnMainThreadAsync(() =>
                     {
+                        var list = new System.Collections.Generic.List<ulong>();
                         var clients = Provider.clients;
                         if (clients != null)
                         {
                             foreach (var client in clients)
                             {
-                                if (client != null) steamIds.Add(client.playerID.steamID.m_SteamID);
+                                if (client != null && client.playerID != null)
+                                {
+                                    list.Add(client.playerID.steamID.m_SteamID);
+                                }
                             }
                         }
-                    });
+                        return list;
+                    }).ConfigureAwait(false);
 
-                    // Wait small tick for main thread collection
-                    await Task.Delay(200, token).ConfigureAwait(false);
+                    if (Economy == null) break;
 
-                    // Perform DB work off main thread
+                    // Perform DB work off main thread concurrently
+                    var payoutTasks = new System.Collections.Generic.List<Task>(steamIds.Count);
                     foreach (var sId in steamIds)
                     {
-                        await Economy.DepositAsync(sId, amount, "PlaytimeIncome").ConfigureAwait(false);
-                        Dispatcher.QueueOnMainThread(() =>
+                        if (token.IsCancellationRequested || Economy == null) break;
+                        payoutTasks.Add(Task.Run(async () =>
                         {
-                            var uPlayer = UnturnedPlayer.FromCSteamID(new CSteamID(sId));
-                            if (uPlayer != null)
+                            try
                             {
-                                var formatted = FormatMoney(amount);
-                                KizChat.Say(uPlayer, Translate("reward_playtime", formatted), UnityEngine.Color.green);
+                                if (Economy == null) return;
+                                await Economy.DepositAsync(sId, amount, "PlaytimeIncome").ConfigureAwait(false);
+                                Dispatcher.QueueOnMainThread(() =>
+                                {
+                                    var uPlayer = UnturnedPlayer.FromCSteamID(new CSteamID(sId));
+                                    if (uPlayer != null)
+                                    {
+                                        var formatted = FormatMoney(amount);
+                                        KizChat.Say(uPlayer, Translate("reward_playtime", formatted), UnityEngine.Color.green);
+                                    }
+                                });
                             }
-                        });
+                            catch (Exception ex)
+                            {
+                                Logger.LogError($"[KizShop] Error in playtime income distribution: {ex.Message}");
+                            }
+                        }));
                     }
+                    await Task.WhenAll(payoutTasks).ConfigureAwait(false);
                 }
             }, token);
         }
@@ -816,6 +955,20 @@ namespace KizShop
                     {
                         await Storage.PruneLogsAsync(Configuration.Instance.LogRetentionDays).ConfigureAwait(false);
                     }
+
+                    try
+                    {
+                        var now = DateTime.UtcNow;
+                        int cooldownSecs = Configuration.Instance.PlayerKillRewardCooldownSeconds;
+                        foreach (var kvp in _killCooldowns)
+                        {
+                            if ((now - kvp.Value).TotalSeconds >= cooldownSecs)
+                            {
+                                _killCooldowns.TryRemove(kvp.Key, out _);
+                            }
+                        }
+                    }
+                    catch { }
                 }
             }, token);
         }

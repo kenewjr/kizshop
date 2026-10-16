@@ -314,6 +314,7 @@ namespace KizShop.Tests
             public Task<List<BountyEntry>> GetAndMarkExpiredBountiesAsync(DateTime cutoffUtc) => Task.FromResult(new List<BountyEntry>());
             public Task ConfirmBountyRefundAsync(int bountyId) => Task.CompletedTask;
 
+            public Task<bool> CanClaimDailyAsync(ulong steamId, int currentDayIndex) => Task.FromResult(true);
             public Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc) => Task.FromResult(new DailyClaimResult { Allowed = true, Streak = 1 });
             public Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak) => Task.CompletedTask;
 

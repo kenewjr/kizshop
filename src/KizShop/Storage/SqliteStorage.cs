@@ -46,7 +46,7 @@ namespace KizShop.Storage
                     await conn.OpenAsync().ConfigureAwait(false);
 
                     using var pragmaCmd = conn.CreateCommand();
-                    pragmaCmd.CommandText = "PRAGMA journal_mode=WAL;";
+                    pragmaCmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8000;";
                     await pragmaCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
                     using var cmd = conn.CreateCommand();
@@ -61,6 +61,7 @@ namespace KizShop.Storage
                             balance INTEGER NOT NULL,
                             last_updated TEXT NOT NULL
                         );
+                        CREATE INDEX IF NOT EXISTS idx_kiz_accounts_balance ON kiz_accounts(balance DESC);
 
                         CREATE TABLE IF NOT EXISTS kiz_transactions (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +99,7 @@ namespace KizShop.Storage
                         );
                         CREATE INDEX IF NOT EXISTS idx_kiz_payouts_key ON kiz_reward_payouts(event_key);
                         CREATE INDEX IF NOT EXISTS idx_kiz_payouts_status ON kiz_reward_payouts(status);
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_kiz_payouts_event_steam ON kiz_reward_payouts(event_key, steam_id);
 
                         CREATE TABLE IF NOT EXISTS kiz_bounties (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +113,7 @@ namespace KizShop.Storage
                         CREATE INDEX IF NOT EXISTS idx_kiz_bounties_target ON kiz_bounties(target_steam_id);
                         CREATE INDEX IF NOT EXISTS idx_kiz_bounties_placer ON kiz_bounties(placer_steam_id);
                         CREATE INDEX IF NOT EXISTS idx_kiz_bounties_created ON kiz_bounties(created_utc);
+                        CREATE INDEX IF NOT EXISTS idx_kiz_bounties_pending ON kiz_bounties(refund_pending);
 
                         CREATE TABLE IF NOT EXISTS kiz_daily_claims (
                             steam_id TEXT PRIMARY KEY,
@@ -120,7 +123,7 @@ namespace KizShop.Storage
                         );
 
                         INSERT OR IGNORE INTO schema_version (version, applied_at) 
-                        VALUES (2, datetime('now'));
+                        VALUES (3, datetime('now'));
                     ";
                     await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
@@ -131,6 +134,30 @@ namespace KizShop.Storage
                         await alterCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
                     catch { /* column already exists */ }
+
+                    try
+                    {
+                        using var idxCmd = conn.CreateCommand();
+                        idxCmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_kiz_bounties_pending ON kiz_bounties(refund_pending);";
+                        await idxCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+                    catch { }
+
+                    try
+                    {
+                        using var uqCmd = conn.CreateCommand();
+                        uqCmd.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_kiz_payouts_event_steam ON kiz_reward_payouts(event_key, steam_id);";
+                        await uqCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+                    catch { }
+
+                    try
+                    {
+                        using var balCmd = conn.CreateCommand();
+                        balCmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_kiz_accounts_balance ON kiz_accounts(balance DESC);";
+                        await balCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+                    catch { }
                 }
                 finally
                 {
@@ -719,7 +746,7 @@ namespace KizShop.Storage
 
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText = @"
-                        INSERT INTO kiz_reward_payouts (event_key, steam_id, amount, status, created_utc)
+                        INSERT OR IGNORE INTO kiz_reward_payouts (event_key, steam_id, amount, status, created_utc)
                         VALUES (@k, @s, @a, @st, @c);
                     ";
                     cmd.Parameters.AddWithValue("@k", eventKey);
@@ -747,7 +774,7 @@ namespace KizShop.Storage
                     await conn.OpenAsync().ConfigureAwait(false);
 
                     using var cmd = conn.CreateCommand();
-                    cmd.CommandText = "SELECT id, event_key, steam_id, amount, status, created_utc FROM kiz_reward_payouts WHERE status = 'Pending';";
+                    cmd.CommandText = "SELECT id, event_key, steam_id, amount, status, created_utc FROM kiz_reward_payouts WHERE status != 'Paid';";
 
                     var list = new List<RewardPayoutEntry>();
                     using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
@@ -1232,6 +1259,31 @@ namespace KizShop.Storage
                     cmd.CommandText = "DELETE FROM kiz_bounties WHERE id = @id;";
                     cmd.Parameters.AddWithValue("@id", bountyId);
                     await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<bool> CanClaimDailyAsync(ulong steamId, int currentDayIndex)
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT last_claim_day_index FROM kiz_daily_claims WHERE steam_id = @id LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@id", steamId.ToString());
+
+                    var res = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    if (res == null || res == DBNull.Value) return true;
+                    return Convert.ToInt32(res) != currentDayIndex;
                 }
                 finally
                 {

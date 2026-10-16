@@ -17,7 +17,7 @@ namespace KizShop.Commands
         public AllowedCaller AllowedCaller => AllowedCaller.Both;
         public string Name => "kizshop";
         public string Help => "Admin command to manage KizShop.";
-        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import>";
+        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway>";
         public List<string> Aliases => new List<string> { "ks" };
         public List<string> Permissions => new List<string> { "kizshop.admin" };
 
@@ -340,6 +340,17 @@ namespace KizShop.Commands
                         KizLog.Info(report.SummaryText);
                         break;
 
+                    case "giveaway":
+                        if (args.Count < 2)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("giveaway_usage"), UnityEngine.Color.yellow));
+                            return;
+                        }
+                        var giveawayArgs = args.Skip(1).ToArray();
+                        await CommandGiveaway.ExecuteGiveawayAsync(caller, giveawayArgs).ConfigureAwait(false);
+                        break;
+
                     default:
                         plugin.Dispatcher.QueueOnMainThread(() =>
                             KizChat.Say(caller, plugin.Translate("kizshop_admin_usage"), UnityEngine.Color.yellow));
@@ -348,11 +359,13 @@ namespace KizShop.Commands
             });
         }
 
+        private static readonly Regex QuotedArgsRegex = new Regex(@"[\""].+?[\""]|[^ ]+", RegexOptions.Compiled);
+
         private static List<string> ParseQuotedArgs(string[] rawArgs)
         {
             var joined = string.Join(" ", rawArgs);
-            var matches = Regex.Matches(joined, @"[\""].+?[\""]|[^ ]+");
-            var result = new List<string>();
+            var matches = QuotedArgsRegex.Matches(joined);
+            var result = new List<string>(matches.Count);
             foreach (Match m in matches)
             {
                 result.Add(m.Value.Trim('"'));

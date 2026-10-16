@@ -33,7 +33,7 @@ namespace KizShop.Commands
                     }
 
                     ulong targetSteamId = 0;
-                    string targetName = command[0];
+                    string targetName = string.Join(" ", command).Trim();
 
                     var targetPlayer = UnturnedPlayer.FromName(targetName);
                     if (targetPlayer != null)
@@ -63,7 +63,7 @@ namespace KizShop.Commands
                     if (targetSteamId == 0)
                     {
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            KizChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
+                            KizChat.Say(caller, plugin.Translate("balance_player_not_found", targetName), UnityEngine.Color.red));
                         return;
                     }
 

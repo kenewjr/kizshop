@@ -33,37 +33,40 @@ namespace KizShop.Storage
                 cmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS schema_version (
                         version INT PRIMARY KEY,
-                        applied_at DATETIME NOT NULL
-                    );
+                        applied_at DATETIME(3) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     CREATE TABLE IF NOT EXISTS kiz_accounts (
                         steam_id BIGINT UNSIGNED PRIMARY KEY,
                         balance BIGINT NOT NULL,
-                        last_updated DATETIME NOT NULL
-                    );
+                        last_updated DATETIME(3) NOT NULL,
+                        INDEX idx_balance (balance)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     CREATE TABLE IF NOT EXISTS kiz_transactions (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        timestamp DATETIME NOT NULL,
+                        timestamp DATETIME(3) NOT NULL,
                         steam_id BIGINT UNSIGNED NOT NULL,
                         type VARCHAR(32) NOT NULL,
                         amount BIGINT NOT NULL,
-                        details VARCHAR(255)
-                    );
+                        details VARCHAR(255),
+                        INDEX idx_tx_steam (steam_id),
+                        INDEX idx_tx_time (timestamp)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     CREATE TABLE IF NOT EXISTS kiz_reward_events (
                         event_key VARCHAR(128) PRIMARY KEY,
                         boss_name VARCHAR(64) NOT NULL,
                         pool BIGINT NOT NULL,
-                        timestamp DATETIME NOT NULL
-                    );
+                        timestamp DATETIME(3) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     CREATE TABLE IF NOT EXISTS kiz_item_prices (
                         item_id INT UNSIGNED PRIMARY KEY,
                         sell_pressure DECIMAL(18, 4) NOT NULL,
                         buy_pressure DECIMAL(18, 4) NOT NULL,
-                        last_updated DATETIME NOT NULL
-                    );
+                        last_updated DATETIME(3) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     CREATE TABLE IF NOT EXISTS kiz_reward_payouts (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -71,10 +74,11 @@ namespace KizShop.Storage
                         steam_id BIGINT UNSIGNED NOT NULL,
                         amount BIGINT NOT NULL,
                         status VARCHAR(32) NOT NULL,
-                        created_utc DATETIME NOT NULL,
+                        created_utc DATETIME(3) NOT NULL,
                         INDEX idx_payout_key (event_key),
-                        INDEX idx_payout_status (status)
-                    );
+                        INDEX idx_payout_status (status),
+                        UNIQUE KEY uq_event_player (event_key, steam_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     CREATE TABLE IF NOT EXISTS kiz_bounties (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -82,36 +86,48 @@ namespace KizShop.Storage
                         target_steam_id BIGINT UNSIGNED NOT NULL,
                         escrow_cents BIGINT NOT NULL,
                         net_cents BIGINT NOT NULL,
-                        created_utc DATETIME NOT NULL,
+                        created_utc DATETIME(3) NOT NULL,
                         refund_pending TINYINT(1) NOT NULL DEFAULT 0,
                         INDEX idx_target (target_steam_id),
                         INDEX idx_placer (placer_steam_id),
-                        INDEX idx_created (created_utc)
-                    );
+                        INDEX idx_created (created_utc),
+                        INDEX idx_bounty_pending (refund_pending)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     CREATE TABLE IF NOT EXISTS kiz_daily_claims (
                         steam_id BIGINT UNSIGNED PRIMARY KEY,
                         last_claim_day_index INT NOT NULL,
                         streak INT NOT NULL,
-                        last_claimed_utc DATETIME NOT NULL
-                    );
+                        last_claimed_utc DATETIME(3) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     INSERT IGNORE INTO schema_version (version, applied_at)
-                    VALUES (2, UTC_TIMESTAMP());
+                    VALUES (3, UTC_TIMESTAMP(3));
                 ";
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-                try
-                {
-                    using var alterCmd = conn.CreateCommand();
-                    alterCmd.CommandText = "ALTER TABLE kiz_bounties ADD COLUMN refund_pending TINYINT(1) NOT NULL DEFAULT 0;";
-                    await alterCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Ignore if column already exists
-                }
+                // Migrations for existing upgraded databases
+                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_bounties ADD COLUMN refund_pending TINYINT(1) NOT NULL DEFAULT 0;").ConfigureAwait(false);
+                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_transactions ADD INDEX idx_tx_steam (steam_id);").ConfigureAwait(false);
+                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_transactions ADD INDEX idx_tx_time (timestamp);").ConfigureAwait(false);
+                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_bounties ADD INDEX idx_bounty_pending (refund_pending);").ConfigureAwait(false);
+                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_reward_payouts ADD UNIQUE KEY uq_event_player (event_key, steam_id);").ConfigureAwait(false);
+                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_accounts ADD INDEX idx_balance (balance);").ConfigureAwait(false);
             }).ConfigureAwait(false);
+        }
+
+        private static async Task TryExecuteMigrationAsync(MySqlConnection conn, string sql)
+        {
+            try
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = sql;
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Ignore if column, index, or constraint already exists
+            }
         }
 
         public async Task<bool> AccountExistsAsync(ulong steamId)
@@ -574,7 +590,7 @@ namespace KizShop.Storage
                         EventKey = reader.GetString(0),
                         BossName = reader.GetString(1),
                         Pool = Money.FromCents(reader.GetInt64(2)),
-                        TimestampUtc = reader.GetDateTime(3)
+                        TimestampUtc = DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc)
                     };
                 }
                 return null;
@@ -590,7 +606,7 @@ namespace KizShop.Storage
 
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = @"
-                    INSERT INTO kiz_reward_payouts (event_key, steam_id, amount, status, created_utc)
+                    INSERT IGNORE INTO kiz_reward_payouts (event_key, steam_id, amount, status, created_utc)
                     VALUES (@k, @s, @a, @st, @c);
                 ";
                 cmd.Parameters.AddWithValue("@k", eventKey ?? string.Empty);
@@ -628,7 +644,7 @@ namespace KizShop.Storage
                         SteamId = (ulong)reader.GetInt64(2),
                         Amount = Money.FromCents(reader.GetInt64(3)),
                         Status = reader.GetString(4),
-                        CreatedUtc = reader.GetDateTime(5)
+                        CreatedUtc = DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc)
                     });
                 }
                 return list;
@@ -668,7 +684,7 @@ namespace KizShop.Storage
                         ItemId = itemId,
                         SellPressure = reader.GetDecimal(0),
                         BuyPressure = reader.GetDecimal(1),
-                        LastUpdatedUtc = reader.GetDateTime(2)
+                        LastUpdatedUtc = DateTime.SpecifyKind(reader.GetDateTime(2), DateTimeKind.Utc)
                     };
                 }
 
@@ -702,7 +718,7 @@ namespace KizShop.Storage
                     {
                         curSell = reader.GetDecimal(0);
                         curBuy = reader.GetDecimal(1);
-                        lastUpdated = reader.GetDateTime(2);
+                        lastUpdated = DateTime.SpecifyKind(reader.GetDateTime(2), DateTimeKind.Utc);
                     }
                 }
 
@@ -855,7 +871,7 @@ namespace KizShop.Storage
                         TargetSteamId = (ulong)reader.GetInt64(2),
                         EscrowAmount = Money.FromCents(reader.GetInt64(3)),
                         NetAmount = Money.FromCents(reader.GetInt64(4)),
-                        CreatedUtc = reader.GetDateTime(5),
+                        CreatedUtc = DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
                         RefundPending = reader.GetBoolean(6)
                     });
                 }
@@ -914,7 +930,7 @@ namespace KizShop.Storage
                             TargetSteamId = (ulong)reader.GetInt64(2),
                             EscrowAmount = Money.FromCents(reader.GetInt64(3)),
                             NetAmount = Money.FromCents(net),
-                            CreatedUtc = reader.GetDateTime(5),
+                            CreatedUtc = DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
                             RefundPending = reader.GetBoolean(6)
                         });
                     }
@@ -966,7 +982,7 @@ namespace KizShop.Storage
                             TargetSteamId = (ulong)reader.GetInt64(2),
                             EscrowAmount = Money.FromCents(reader.GetInt64(3)),
                             NetAmount = Money.FromCents(reader.GetInt64(4)),
-                            CreatedUtc = reader.GetDateTime(5),
+                            CreatedUtc = DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
                             RefundPending = true
                         });
                     }
@@ -997,6 +1013,23 @@ namespace KizShop.Storage
                 cmd.CommandText = "DELETE FROM kiz_bounties WHERE id = @id;";
                 cmd.Parameters.AddWithValue("@id", bountyId);
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<bool> CanClaimDailyAsync(ulong steamId, int currentDayIndex)
+        {
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT last_claim_day_index FROM kiz_daily_claims WHERE steam_id = @id LIMIT 1;";
+                cmd.Parameters.AddWithValue("@id", steamId);
+
+                var res = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                if (res == null || res == DBNull.Value) return true;
+                return Convert.ToInt32(res) != currentDayIndex;
             }).ConfigureAwait(false);
         }
 

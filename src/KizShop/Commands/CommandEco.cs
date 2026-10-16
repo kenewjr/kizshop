@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
@@ -13,7 +14,7 @@ namespace KizShop.Commands
         public AllowedCaller AllowedCaller => AllowedCaller.Both;
         public string Name => "eco";
         public string Help => "Admin command to manage player balances.";
-        public string Syntax => "<give|take|set> <player|steamid> <amount>";
+        public string Syntax => "<give|take|set|giveaway> <player|steamid|amount> [amount]";
         public List<string> Aliases => new List<string> { "economy" };
         public List<string> Permissions => new List<string> { "kizshop.eco", "kizshop.admin" };
 
@@ -23,7 +24,7 @@ namespace KizShop.Commands
             {
                 var plugin = KizShopPlugin.Instance;
 
-                if (command.Length < 3)
+                if (command.Length < 1)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
                         KizChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
@@ -31,9 +32,25 @@ namespace KizShop.Commands
                 }
 
                 string subAction = command[0].ToLowerInvariant();
-                string targetArg = command[1];
+                if (subAction == "giveaway")
+                {
+                    string[] subArgs = new string[command.Length - 1];
+                    Array.Copy(command, 1, subArgs, 0, subArgs.Length);
+                    await CommandGiveaway.ExecuteGiveawayAsync(caller, subArgs).ConfigureAwait(false);
+                    return;
+                }
 
-                if (!decimal.TryParse(command[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var rawAmount))
+                if (command.Length < 3)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("eco_usage"), UnityEngine.Color.yellow));
+                    return;
+                }
+
+                string amountArg = command[command.Length - 1];
+                string targetArg = string.Join(" ", command, 1, command.Length - 2).Trim();
+
+                if (!decimal.TryParse(amountArg, NumberStyles.Number, CultureInfo.InvariantCulture, out var rawAmount))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
                         KizChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red));

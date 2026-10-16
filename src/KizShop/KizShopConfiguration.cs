@@ -94,6 +94,7 @@ namespace KizShop
         public int DailyStreakBonusPercentPerDay { get; set; } = 10;
         public int DailyMaxStreakDays { get; set; } = 7;
         public int DailyResetUtcOffsetHours { get; set; } = 7;
+        public bool DailyReminderOnJoin { get; set; } = true;
 
         public void LoadDefaults()
         {
@@ -171,6 +172,7 @@ namespace KizShop
             DailyStreakBonusPercentPerDay = 10;
             DailyMaxStreakDays = 7;
             DailyResetUtcOffsetHours = 7;
+            DailyReminderOnJoin = true;
         }
 
         public void Normalize()

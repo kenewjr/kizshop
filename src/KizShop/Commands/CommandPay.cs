@@ -31,7 +31,10 @@ namespace KizShop.Commands
                     return;
                 }
 
-                if (!decimal.TryParse(command[1], NumberStyles.Number, CultureInfo.InvariantCulture, out var rawAmount))
+                string rawAmountArg = command[command.Length - 1];
+                string targetName = string.Join(" ", command, 0, command.Length - 1).Trim();
+
+                if (!decimal.TryParse(rawAmountArg, NumberStyles.Number, CultureInfo.InvariantCulture, out var rawAmount))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
                         KizChat.Say(caller, plugin.Translate("pay_invalid_amount"), UnityEngine.Color.red));
@@ -48,7 +51,6 @@ namespace KizShop.Commands
 
                 // Target resolution
                 ulong targetSteamId = 0;
-                string targetName = command[0];
                 var targetPlayer = UnturnedPlayer.FromName(targetName);
 
                 if (targetPlayer != null)
@@ -56,7 +58,7 @@ namespace KizShop.Commands
                     targetSteamId = targetPlayer.CSteamID.m_SteamID;
                     targetName = targetPlayer.CharacterName;
                 }
-                else if (ulong.TryParse(command[0], out var parsedId))
+                else if (ulong.TryParse(targetName, out var parsedId))
                 {
                     // Validate SteamID64 range
                     if (parsedId < 76561197960265728ul || parsedId > 76561202255233023ul)
@@ -71,7 +73,7 @@ namespace KizShop.Commands
                     if (!exists)
                     {
                         plugin.Dispatcher.QueueOnMainThread(() =>
-                            KizChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
+                            KizChat.Say(caller, plugin.Translate("balance_player_not_found", targetName), UnityEngine.Color.red));
                         return;
                     }
                     targetSteamId = parsedId;
@@ -80,7 +82,7 @@ namespace KizShop.Commands
                 if (targetSteamId == 0)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
-                        KizChat.Say(caller, plugin.Translate("balance_player_not_found", command[0]), UnityEngine.Color.red));
+                        KizChat.Say(caller, plugin.Translate("balance_player_not_found", targetName), UnityEngine.Color.red));
                     return;
                 }
 
@@ -94,35 +96,49 @@ namespace KizShop.Commands
                 var fromSteamId = sender.CSteamID.m_SteamID;
                 var fromName = sender.CharacterName;
 
-                var result = await plugin.Economy.TransferAsync(fromSteamId, targetSteamId, amount, "PayCommand").ConfigureAwait(false);
-
-                plugin.Dispatcher.QueueOnMainThread(() =>
+                if (!PlayerLock.TryAcquire(fromSteamId))
                 {
-                    if (result.Success)
-                    {
-                        var formattedAmount = plugin.FormatMoney(amount);
-                        var formattedBal = plugin.FormatMoney(result.FromNewBalance);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("transaction_in_flight"), UnityEngine.Color.red));
+                    return;
+                }
 
-                        KizChat.Say(caller, plugin.Translate("pay_sent", formattedAmount, targetName, formattedBal), UnityEngine.Color.green);
+                try
+                {
+                    var result = await plugin.Economy.TransferAsync(fromSteamId, targetSteamId, amount, "PayCommand").ConfigureAwait(false);
 
-                        if (targetPlayer != null)
-                        {
-                            var formattedTargetBal = plugin.FormatMoney(result.ToNewBalance);
-                            KizChat.Say(targetPlayer, plugin.Translate("pay_received", formattedAmount, fromName, formattedTargetBal), UnityEngine.Color.green);
-                        }
-                    }
-                    else
+                    plugin.Dispatcher.QueueOnMainThread(() =>
                     {
-                        if (result.FromOldBalance < amount)
+                        if (result.Success)
                         {
-                            KizChat.Say(caller, plugin.Translate("pay_insufficient_funds", plugin.FormatMoney(amount)), UnityEngine.Color.red);
+                            var formattedAmount = plugin.FormatMoney(amount);
+                            var formattedBal = plugin.FormatMoney(result.FromNewBalance);
+
+                            KizChat.Say(caller, plugin.Translate("pay_sent", formattedAmount, targetName, formattedBal), UnityEngine.Color.green);
+
+                            if (targetPlayer != null)
+                            {
+                                var formattedTargetBal = plugin.FormatMoney(result.ToNewBalance);
+                                KizChat.Say(targetPlayer, plugin.Translate("pay_received", formattedAmount, fromName, formattedTargetBal), UnityEngine.Color.green);
+                            }
                         }
                         else
                         {
-                            KizChat.Say(caller, plugin.Translate("pay_receiver_max_balance", targetName), UnityEngine.Color.red);
+                            if (result.FromOldBalance < amount)
+                            {
+                                KizChat.Say(caller, plugin.Translate("pay_insufficient_funds", plugin.FormatMoney(amount)), UnityEngine.Color.red);
+                            }
+                            else
+                            {
+                                KizChat.Say(caller, plugin.Translate("pay_receiver_max_balance", targetName), UnityEngine.Color.red);
+                            }
                         }
-                    }
-                });
+                    });
+                }
+                finally
+                {
+                    PlayerLock.Release(fromSteamId);
+                }
             });
         }
     }
