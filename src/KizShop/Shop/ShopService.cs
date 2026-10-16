@@ -22,6 +22,44 @@ namespace KizShop.Shop
         private readonly Dictionary<string, KitShopEntry> _kitsByName = new Dictionary<string, KitShopEntry>(StringComparer.OrdinalIgnoreCase);
         private List<string> _cachedCategories = new List<string>();
         private Dictionary<string, int> _cachedCategoryCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private SaleEvent _activeSale;
+
+        public SaleEvent ActiveSale
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    if (_activeSale != null && !_activeSale.IsActive(DateTime.UtcNow))
+                    {
+                        _activeSale = null;
+                    }
+                    return _activeSale;
+                }
+            }
+        }
+
+        public void StartSale(decimal buyMultiplier, decimal sellMultiplier, int durationMinutes, string name = "Happy Hour")
+        {
+            lock (_lock)
+            {
+                _activeSale = new SaleEvent
+                {
+                    BuyMultiplier = buyMultiplier,
+                    SellMultiplier = sellMultiplier,
+                    ExpiresUtc = DateTime.UtcNow.AddMinutes(durationMinutes),
+                    Name = name
+                };
+            }
+        }
+
+        public void ClearSale()
+        {
+            lock (_lock)
+            {
+                _activeSale = null;
+            }
+        }
 
         public ShopService(string dataFolder, Func<bool> allowSellAboveBuy = null)
         {

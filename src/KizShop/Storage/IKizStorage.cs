@@ -19,6 +19,9 @@ namespace KizShop.Storage
         Task SetBalanceAsync(ulong steamId, Money amount, string reason);
         Task LogTransactionAsync(ulong steamId, string type, Money amount, string details);
         Task PruneLogsAsync(int retentionDays);
+        Task<List<TransactionRecord>> GetTransactionHistoryAsync(ulong steamId, int limit, int offset);
+        Task<List<TransactionRecord>> GetAllTransactionsAsync(int limit, int offset);
+        Task<List<(ulong SteamId, Money Balance)>> GetAllAccountsAsync();
 
         // Boss Rewards
         Task<bool> TryRecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime utc);

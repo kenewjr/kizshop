@@ -103,6 +103,9 @@ namespace KizShop.Tests
         public Task SetBalanceAsync(ulong steamId, Money amount, string reason) => Task.CompletedTask;
         public Task LogTransactionAsync(ulong steamId, string type, Money amount, string details) => Task.CompletedTask;
         public Task PruneLogsAsync(int retentionDays) => Task.CompletedTask;
+        public Task<List<TransactionRecord>> GetTransactionHistoryAsync(ulong steamId, int limit, int offset) => Task.FromResult(new List<TransactionRecord>());
+        public Task<List<TransactionRecord>> GetAllTransactionsAsync(int limit, int offset) => Task.FromResult(new List<TransactionRecord>());
+        public Task<List<(ulong SteamId, Money Balance)>> GetAllAccountsAsync() => Task.FromResult(new List<(ulong SteamId, Money Balance)>());
 
         public Task<bool> TryRecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime utc) => Task.FromResult(true);
         public Task<BossRewardEventEntry> GetRewardEventAsync(string eventKey) => Task.FromResult<BossRewardEventEntry>(null);

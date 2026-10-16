@@ -100,6 +100,7 @@ namespace KizShop
             { "sell_gun_has_attachments", "<color=red>Cannot sell gun with attachments or loaded magazine. Remove them first.</color>" },
             { "sell_failed", "<color=red>Failed to remove items from inventory.</color>" },
             { "sell_payout_failed", "<color=red>Payout failed. Removed items have been restored to your inventory.</color>" },
+            { "sell_item_too_damaged", "<color=red>Item '{0}' is too damaged ({1}% quality). Minimum required quality to sell is {2}%.</color>" },
             { "sell_success", "<color=green>Sold {0}x {1} for {2}. New balance: {3}.</color>" },
 
             { "cost_usage", "Usage: /cost <item name|id|guid>" },
@@ -140,7 +141,7 @@ namespace KizShop
             { "reward_mega_zombie_kill", "<color=yellow>+ {0} for MEGA zombie kill!</color>" },
             { "reward_playtime", "<color=green>+ {0} playtime income reward!</color>" },
 
-            { "kizshop_admin_usage", "Usage: /kizshop <version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway>" },
+            { "kizshop_admin_usage", "Usage: /kizshop <version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway|sale|export>" },
             { "kizshop_additem_usage", "Usage: /kizshop additem <id> \"<name>\" <buyPrice> [sellPrice] [permission]" },
             { "kizshop_removeitem_usage", "Usage: /kizshop removeitem <id>" },
             { "kizshop_setitemprice_usage", "Usage: /kizshop setitemprice <id> <buyPrice> [sellPrice]" },
@@ -216,7 +217,21 @@ namespace KizShop
             { "giveaway_invalid_amount", "<color=red>Invalid giveaway amount: {0}</color>" },
             { "giveaway_no_players", "<color=yellow>No online players found to receive giveaway.</color>" },
             { "giveaway_broadcast", "<color=yellow>[GIVEAWAY] {0} gave {1} to all online players ({2} players)!</color>" },
-            { "giveaway_success", "<color=green>Successfully distributed {0} to {1} online players.</color>" }
+            { "giveaway_success", "<color=green>Successfully distributed {0} to {1} online players.</color>" },
+
+            { "history_header", "<color=cyan>--- Transaction History (Page {0}) ---</color>" },
+            { "history_entry", "<color=gray>[{0:MM/dd HH:mm}]</color> <color=yellow>{1}</color>: <color={2}>{3}</color> <color=gray>({4})</color>" },
+            { "history_empty", "No transaction history found." },
+
+            { "sale_usage", "Usage: /kizshop sale <buyMultiplier> <sellMultiplier> <durationMinutes> [name] | /kizshop sale clear" },
+            { "sale_status", "<color=cyan>[SALE ACTIVE] {0} - Buy: x{1}, Sell: x{2} ({3}m remaining)</color>" },
+            { "sale_started", "<color=green>Started sale '{0}' (Buy x{1}, Sell x{2}) for {3} minutes.</color>" },
+            { "sale_cleared", "<color=green>Active sale event has been cleared.</color>" },
+            { "sale_broadcast_start", "<color=yellow>🔥 [EVENT: {0}] {1}% purchase discount, +{2}% sell bonus for {3} minutes!</color>" },
+            { "sale_broadcast_ended", "<color=yellow>Event '{0}' has ended. Regular shop pricing restored.</color>" },
+
+            { "kizshop_export_usage", "Usage: /kizshop export <accounts|transactions>" },
+            { "kizshop_export_success", "<color=green>Exported {0} rows to {1}.</color>" }
         };
 
         protected override void Load()

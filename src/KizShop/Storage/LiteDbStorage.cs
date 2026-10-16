@@ -397,6 +397,77 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
+        public Task<List<TransactionRecord>> GetTransactionHistoryAsync(ulong steamId, int limit, int offset)
+        {
+            if (limit <= 0) limit = 10;
+            if (offset < 0) offset = 0;
+
+            return Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var txs = _db.GetCollection<TransactionDoc>("transactions");
+                    long sId = (long)steamId;
+                    var results = txs.Query()
+                        .Where(x => x.SteamId == sId)
+                        .OrderByDescending(x => x.Timestamp)
+                        .Skip(offset)
+                        .Limit(limit)
+                        .ToList();
+
+                    return results.Select(r => new TransactionRecord
+                    {
+                        Timestamp = r.Timestamp,
+                        SteamId = (ulong)r.SteamId,
+                        Type = r.Type,
+                        Amount = Money.FromCents(r.AmountCents),
+                        Details = r.Details
+                    }).ToList();
+                }
+            });
+        }
+
+        public Task<List<TransactionRecord>> GetAllTransactionsAsync(int limit, int offset)
+        {
+            if (limit <= 0) limit = 50;
+            if (offset < 0) offset = 0;
+
+            return Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var txs = _db.GetCollection<TransactionDoc>("transactions");
+                    var results = txs.Query()
+                        .OrderByDescending(x => x.Timestamp)
+                        .Skip(offset)
+                        .Limit(limit)
+                        .ToList();
+
+                    return results.Select(r => new TransactionRecord
+                    {
+                        Timestamp = r.Timestamp,
+                        SteamId = (ulong)r.SteamId,
+                        Type = r.Type,
+                        Amount = Money.FromCents(r.AmountCents),
+                        Details = r.Details
+                    }).ToList();
+                }
+            });
+        }
+
+        public Task<List<(ulong SteamId, Money Balance)>> GetAllAccountsAsync()
+        {
+            return Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var accs = _db.GetCollection<AccountDoc>("accounts");
+                    var all = accs.FindAll().ToList();
+                    return all.Select(a => ((ulong)a.SteamId, Money.FromCents(a.BalanceCents))).ToList();
+                }
+            });
+        }
+
         private void LogTransactionInternal(ulong steamId, string type, long amountCents, string details)
         {
             var txs = _db.GetCollection<TransactionDoc>("transactions");

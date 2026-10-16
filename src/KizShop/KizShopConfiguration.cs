@@ -19,6 +19,7 @@ namespace KizShop
 
         // Pricing & item rules
         public bool ScaleSellByQuality { get; set; } = true;
+        public byte MinItemSellQuality { get; set; } = 10;
         public bool AllowSellAboveBuy { get; set; } = false;
         public bool GunPurchaseIncludesMagazine { get; set; } = false;
         public bool AutoEquipPurchasedItems { get; set; } = false;
@@ -109,6 +110,7 @@ namespace KizShop
             LogRetentionDays = 30;
 
             ScaleSellByQuality = true;
+            MinItemSellQuality = 10;
             AllowSellAboveBuy = false;
             GunPurchaseIncludesMagazine = false;
             AutoEquipPurchasedItems = false;

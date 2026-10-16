@@ -17,7 +17,7 @@ namespace KizShop.Commands
         public AllowedCaller AllowedCaller => AllowedCaller.Both;
         public string Name => "kizshop";
         public string Help => "Admin command to manage KizShop.";
-        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway>";
+        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway|sale|export>";
         public List<string> Aliases => new List<string> { "ks" };
         public List<string> Permissions => new List<string> { "kizshop.admin" };
 
@@ -349,6 +349,97 @@ namespace KizShop.Commands
                         }
                         var giveawayArgs = args.Skip(1).ToArray();
                         await CommandGiveaway.ExecuteGiveawayAsync(caller, giveawayArgs).ConfigureAwait(false);
+                        break;
+
+                    case "sale":
+                        if (args.Count < 2)
+                        {
+                            var curSale = plugin.Shop.ActiveSale;
+                            if (curSale != null && curSale.IsActive(DateTime.UtcNow))
+                            {
+                                int remMins = (int)Math.Max(1, Math.Ceiling((curSale.ExpiresUtc - DateTime.UtcNow).TotalMinutes));
+                                plugin.Dispatcher.QueueOnMainThread(() =>
+                                    KizChat.Say(caller, plugin.Translate("sale_status", curSale.Name, curSale.BuyMultiplier, curSale.SellMultiplier, remMins), UnityEngine.Color.cyan));
+                            }
+                            else
+                            {
+                                plugin.Dispatcher.QueueOnMainThread(() =>
+                                    KizChat.Say(caller, plugin.Translate("sale_usage"), UnityEngine.Color.yellow));
+                            }
+                            return;
+                        }
+
+                        string saleSub = args[1].ToLowerInvariant();
+                        if (saleSub == "clear" || saleSub == "off" || saleSub == "stop")
+                        {
+                            var oldSale = plugin.Shop.ActiveSale;
+                            plugin.Shop.ClearSale();
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                            {
+                                KizChat.Say(caller, plugin.Translate("sale_cleared"), UnityEngine.Color.green);
+                                if (oldSale != null)
+                                {
+                                    KizChat.Broadcast(plugin.Translate("sale_broadcast_ended", oldSale.Name), UnityEngine.Color.yellow);
+                                }
+                            });
+                            return;
+                        }
+
+                        if (args.Count < 4 ||
+                            !decimal.TryParse(args[1], NumberStyles.Number, CultureInfo.InvariantCulture, out var bMult) ||
+                            !decimal.TryParse(args[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var sMult) ||
+                            !int.TryParse(args[3], out var saleMins) || saleMins <= 0)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("sale_usage"), UnityEngine.Color.yellow));
+                            return;
+                        }
+
+                        string saleName = args.Count >= 5 ? args[4] : "Happy Hour";
+                        plugin.Shop.StartSale(bMult, sMult, saleMins, saleName);
+
+                        int discountPercent = (int)Math.Round((1.0m - bMult) * 100m);
+                        int bonusPercent = (int)Math.Round((sMult - 1.0m) * 100m);
+
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                        {
+                            KizChat.Say(caller, plugin.Translate("sale_started", saleName, bMult, sMult, saleMins), UnityEngine.Color.green);
+                            KizChat.Broadcast(plugin.Translate("sale_broadcast_start", saleName, discountPercent, bonusPercent, saleMins), UnityEngine.Color.yellow);
+                        });
+                        break;
+
+                    case "export":
+                        if (args.Count < 2)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_export_usage"), UnityEngine.Color.yellow));
+                            return;
+                        }
+
+                        string exportType = args[1].ToLowerInvariant();
+                        var exporter = new DataExportService(plugin.Storage);
+                        string timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+                        string exportFolder = System.IO.Path.Combine(plugin.Directory, "exports");
+
+                        if (exportType == "accounts" || exportType == "acc")
+                        {
+                            string outPath = System.IO.Path.Combine(exportFolder, $"accounts_{timestamp}.csv");
+                            int exportedCount = await exporter.ExportAccountsToCsvAsync(outPath).ConfigureAwait(false);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_export_success", exportedCount, outPath), UnityEngine.Color.green));
+                        }
+                        else if (exportType == "transactions" || exportType == "tx")
+                        {
+                            string outPath = System.IO.Path.Combine(exportFolder, $"transactions_{timestamp}.csv");
+                            int exportedCount = await exporter.ExportTransactionsToCsvAsync(outPath).ConfigureAwait(false);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_export_success", exportedCount, outPath), UnityEngine.Color.green));
+                        }
+                        else
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("kizshop_export_usage"), UnityEngine.Color.yellow));
+                        }
                         break;
 
                     default:

@@ -136,38 +136,62 @@ namespace KizShop.Shop
         public async Task<(Money TotalPrice, Money FirstUnitPrice)> GetEffectiveBuyPriceAsync(ItemShopEntry entry, int quantity)
         {
             var cfg = _configProvider();
+            (Money TotalPrice, Money FirstUnitPrice) basePrices;
             bool dynamicActive = (entry.DynamicPricing != null && entry.DynamicPricing.Enabled) || (entry.DynamicPricing == null && cfg.DynamicPricingDefaultEnabled);
             if (_storage == null || !dynamicActive)
             {
                 long unitCents = (long)Math.Round(entry.BuyPrice * 100m, MidpointRounding.AwayFromZero);
-                return (Money.FromCents(unitCents * quantity), Money.FromCents(unitCents));
+                basePrices = (Money.FromCents(unitCents * quantity), Money.FromCents(unitCents));
+            }
+            else
+            {
+                var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = true };
+                var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
+                decimal recSell = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                decimal recBuy = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+
+                basePrices = PriceCalculator.CalculateSequentialBuyPrice(entry.BuyPrice, entry.SellPrice ?? 0m, dynCfg, recBuy, recSell, quantity, cfg.AllowSellAboveBuy);
             }
 
-            var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = true };
-            var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
-            decimal recSell = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
-            decimal recBuy = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
-
-            return PriceCalculator.CalculateSequentialBuyPrice(entry.BuyPrice, entry.SellPrice ?? 0m, dynCfg, recBuy, recSell, quantity, cfg.AllowSellAboveBuy);
+            var sale = _shopService?.ActiveSale;
+            if (sale != null && sale.IsActive(_clock.UtcNow) && sale.BuyMultiplier != 1.0m)
+            {
+                long saleTotal = (long)Math.Round(basePrices.TotalPrice.Cents * sale.BuyMultiplier, MidpointRounding.AwayFromZero);
+                long saleUnit = (long)Math.Round(basePrices.FirstUnitPrice.Cents * sale.BuyMultiplier, MidpointRounding.AwayFromZero);
+                return (Money.FromCents(saleTotal), Money.FromCents(saleUnit));
+            }
+            return basePrices;
         }
 
         public async Task<(Money TotalPrice, Money FirstUnitPrice)> GetEffectiveSellPriceAsync(ItemShopEntry entry, int quantity)
         {
             var cfg = _configProvider();
             decimal baseSell = entry.SellPrice ?? 0m;
+            (Money TotalPrice, Money FirstUnitPrice) basePrices;
             bool dynamicActive = (entry.DynamicPricing != null && entry.DynamicPricing.Enabled) || (entry.DynamicPricing == null && cfg.DynamicPricingDefaultEnabled);
             if (_storage == null || !dynamicActive)
             {
                 long unitCents = (long)Math.Round(baseSell * 100m, MidpointRounding.AwayFromZero);
-                return (Money.FromCents(unitCents * quantity), Money.FromCents(unitCents));
+                basePrices = (Money.FromCents(unitCents * quantity), Money.FromCents(unitCents));
+            }
+            else
+            {
+                var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = true };
+                var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
+                decimal recSell = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+                decimal recBuy = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
+
+                basePrices = PriceCalculator.CalculateSequentialSellPrice(entry.BuyPrice, baseSell, dynCfg, recBuy, recSell, quantity, cfg.AllowSellAboveBuy);
             }
 
-            var dynCfg = entry.DynamicPricing ?? new ItemDynamicPricingConfig { Enabled = true };
-            var state = await _storage.GetItemPriceStateAsync(entry.Id).ConfigureAwait(false);
-            decimal recSell = PriceCalculator.ComputeRecoveredPressure(state.SellPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
-            decimal recBuy = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
-
-            return PriceCalculator.CalculateSequentialSellPrice(entry.BuyPrice, baseSell, dynCfg, recBuy, recSell, quantity, cfg.AllowSellAboveBuy);
+            var sale = _shopService?.ActiveSale;
+            if (sale != null && sale.IsActive(_clock.UtcNow) && sale.SellMultiplier != 1.0m)
+            {
+                long saleTotal = (long)Math.Round(basePrices.TotalPrice.Cents * sale.SellMultiplier, MidpointRounding.AwayFromZero);
+                long saleUnit = (long)Math.Round(basePrices.FirstUnitPrice.Cents * sale.SellMultiplier, MidpointRounding.AwayFromZero);
+                return (Money.FromCents(saleTotal), Money.FromCents(saleUnit));
+            }
+            return basePrices;
         }
 
         private void SafeRaiseItemPurchased(ulong steamId, ItemShopEntry entry, int quantity, Money totalMoney, Money newBal)
@@ -502,6 +526,16 @@ namespace KizShop.Shop
                 {
                     return new ShopTransactionResult { Success = false, ErrorKey = "sell_gun_has_attachments" };
                 }
+
+                if (cfg.ScaleSellByQuality && instance.Quality < cfg.MinItemSellQuality)
+                {
+                    return new ShopTransactionResult
+                    {
+                        Success = false,
+                        ErrorKey = "sell_item_too_damaged",
+                        ErrorArgs = new object[] { entry.Name, instance.Quality, cfg.MinItemSellQuality }
+                    };
+                }
             }
 
             int amountToSell = 1;
@@ -536,6 +570,9 @@ namespace KizShop.Shop
                 startingBuyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
             }
 
+            var sale = _shopService?.ActiveSale;
+            decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+
             long totalPayoutCents = 0;
             decimal curSellPressure = startingSellPressure;
             foreach (var inst in toSell)
@@ -551,7 +588,7 @@ namespace KizShop.Shop
                     curSellPressure,
                     cfg.AllowSellAboveBuy);
 
-                decimal instanceVal = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio;
+                decimal instanceVal = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
                 long cents = (long)Math.Round(instanceVal * 100m, MidpointRounding.AwayFromZero);
                 totalPayoutCents += cents;
 
@@ -696,12 +733,25 @@ namespace KizShop.Shop
                 buyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
             }
 
+            if (cfg.ScaleSellByQuality && equipped.Quality < cfg.MinItemSellQuality)
+            {
+                return new ShopTransactionResult
+                {
+                    Success = false,
+                    ErrorKey = "sell_item_too_damaged",
+                    ErrorArgs = new object[] { entry.Name, equipped.Quality, cfg.MinItemSellQuality }
+                };
+            }
+
             byte defaultAmount = await _inventoryGateway.GetDefaultAmountAsync(entry.Id).ConfigureAwait(false);
             decimal amountRatio = (defaultAmount > 1) ? ((decimal)equipped.Amount / defaultAmount) : 1.0m;
             decimal qualityRatio = cfg.ScaleSellByQuality ? (equipped.Quality / 100m) : 1.0m;
 
+            var sale = _shopService?.ActiveSale;
+            decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+
             var singleUnitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, sellPressure, cfg.AllowSellAboveBuy);
-            decimal finalDec = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio;
+            decimal finalDec = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
             var payout = Money.FromCents((long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero));
 
             if (!PlayerLock.TryAcquire(steamId))
@@ -831,6 +881,12 @@ namespace KizShop.Shop
                     continue;
                 }
 
+                if (cfg.ScaleSellByQuality && inst.Quality < cfg.MinItemSellQuality)
+                {
+                    skippedOther++;
+                    continue;
+                }
+
                 eligibleItems.Add(inst);
             }
 
@@ -870,6 +926,9 @@ namespace KizShop.Shop
                     buyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
                 }
 
+                var sale = _shopService?.ActiveSale;
+                decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+
                 decimal curSell = sellPressure;
                 foreach (var inst in grp)
                 {
@@ -877,7 +936,7 @@ namespace KizShop.Shop
                     decimal qualityRatio = cfg.ScaleSellByQuality ? (inst.Quality / 100m) : 1.0m;
 
                     var unitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
-                    decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio;
+                    decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
                     totalExpectedCents += (long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero);
 
                     if (dynCfg.Enabled) curSell += 1.0m;
@@ -940,6 +999,7 @@ namespace KizShop.Shop
                 if (!catalogItems.TryGetValue(inst.ItemId, out var entry)) continue;
                 if (!string.IsNullOrEmpty(entry.Permission) && !isAdmin && !hasPermission(entry.Permission)) continue;
                 if (await _inventoryGateway.HasAttachmentsOrLoadedMagazineAsync(inst.ItemId, inst.State).ConfigureAwait(false)) continue;
+                if (cfg.ScaleSellByQuality && inst.Quality < cfg.MinItemSellQuality) continue;
                 eligibleItems.Add(inst);
             }
 
@@ -962,13 +1022,16 @@ namespace KizShop.Shop
                     buyPressure = PriceCalculator.ComputeRecoveredPressure(state.BuyPressure, state.LastUpdatedUtc, _clock.UtcNow, dynCfg.RecoveryPerHour);
                 }
 
+                var sale = _shopService?.ActiveSale;
+                decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+
                 decimal curSell = sellPressure;
                 foreach (var inst in grp)
                 {
                     decimal amountRatio = (defAmount > 1) ? ((decimal)inst.Amount / defAmount) : 1.0m;
                     decimal qualityRatio = cfg.ScaleSellByQuality ? (inst.Quality / 100m) : 1.0m;
                     var unitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
-                    decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio;
+                    decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
                     recomputedCents += (long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero);
                     if (dynCfg.Enabled) curSell += 1.0m;
                 }
@@ -1125,7 +1188,14 @@ namespace KizShop.Shop
                 return new ShopTransactionResult { Success = false, ErrorKey = "vehicle_max_limit", ErrorArgs = new object[] { cfg.MaxVehiclesPerPlayer } };
             }
 
-            if (!Money.TryFromDecimal(entry.BuyPrice, cfg.MaxTransactionAmount, out var costMoney, out var moneyErr))
+            var sale = _shopService?.ActiveSale;
+            decimal effectiveBuyPrice = entry.BuyPrice;
+            if (sale != null && sale.IsActive(_clock.UtcNow) && sale.BuyMultiplier != 1.0m)
+            {
+                effectiveBuyPrice = Math.Round(effectiveBuyPrice * sale.BuyMultiplier, 2, MidpointRounding.AwayFromZero);
+            }
+
+            if (!Money.TryFromDecimal(effectiveBuyPrice, cfg.MaxTransactionAmount, out var costMoney, out var moneyErr))
             {
                 return new ShopTransactionResult { Success = false, ErrorKey = "invalid_money_amount", ErrorArgs = new object[] { moneyErr } };
             }
@@ -1273,7 +1343,14 @@ namespace KizShop.Shop
                 }
             }
 
-            if (!Money.TryFromDecimal(kit.BuyPrice, cfg.MaxTransactionAmount, out var kitPrice, out var moneyErr))
+            var sale = _shopService?.ActiveSale;
+            decimal effectiveBuyPrice = kit.BuyPrice;
+            if (sale != null && sale.IsActive(_clock.UtcNow) && sale.BuyMultiplier != 1.0m)
+            {
+                effectiveBuyPrice = Math.Round(effectiveBuyPrice * sale.BuyMultiplier, 2, MidpointRounding.AwayFromZero);
+            }
+
+            if (!Money.TryFromDecimal(effectiveBuyPrice, cfg.MaxTransactionAmount, out var kitPrice, out var moneyErr))
             {
                 return new ShopKitTransactionResult { Success = false, ErrorKey = "invalid_money_amount", ErrorArgs = new object[] { moneyErr } };
             }

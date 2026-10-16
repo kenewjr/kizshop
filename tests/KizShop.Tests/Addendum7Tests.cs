@@ -1009,7 +1009,7 @@ namespace KizShop.Tests
                 Assert.DoesNotContain("color=gold", tr.Value, StringComparison.OrdinalIgnoreCase);
 
                 // Placeholders {0}, {1}, etc. must not throw FormatException when formatted with dummy objects
-                var dummyArgs = new object[] { "A", "B", "C", "D" };
+                var dummyArgs = new object[] { DateTime.UtcNow, "B", "C", "D", "E", "F", "G", "H" };
                 try
                 {
                     string formatted = string.Format(tr.Value, dummyArgs);
@@ -1020,6 +1020,132 @@ namespace KizShop.Tests
                     Assert.Fail($"Translation key '{tr.Id}' has invalid format string '{tr.Value}': {ex.Message}");
                 }
             }
+        }
+
+        [Fact]
+        public async Task ShopTransactionService_Sell_DamagedItemBelowThreshold_RejectsWithTooDamaged()
+        {
+            string dbPath = Path.Combine(_tempDir, "damaged_item_test.litedb");
+            using var storage = new LiteDbStorage(dbPath);
+            await storage.InitializeAsync();
+
+            var eco = new EconomyService(storage, () => Money.Zero, () => null, true, new TestMainThreadDispatcher());
+            var shop = new ShopService(_tempDir);
+            shop.AddOrUpdateItem(new ItemShopEntry
+            {
+                Id = 1001,
+                Name = "TestGun",
+                BuyPrice = 100m,
+                SellPrice = 50m,
+                Category = "Guns",
+                Enabled = true
+            });
+
+            var inventory = new MockInventoryGateway();
+            ulong steamId = 76561198000000111UL;
+            // Add item with 5% quality (below MinItemSellQuality = 10)
+            inventory.GearItems.Add(new InventoryItemInstance
+            {
+                Page = SDG.Unturned.PlayerInventory.BACKPACK,
+                Index = 0,
+                Item = new SDG.Unturned.Item(1001, 1, 5, new byte[16])
+            });
+
+            var vehicle = new MockVehicleGateway();
+            var cfg = new KizShopConfiguration
+            {
+                ScaleSellByQuality = true,
+                MinItemSellQuality = 10
+            };
+            var tx = new ShopTransactionService(shop, eco, inventory, vehicle, () => cfg, _clock);
+
+            var res = await tx.ExecuteSellAsync(steamId, "1001", "1", _ => true, false);
+
+            Assert.False(res.Success);
+            Assert.Equal("sell_item_too_damaged", res.ErrorKey);
+            Assert.NotNull(res.ErrorArgs);
+            Assert.Equal((byte)5, res.ErrorArgs[1]);
+        }
+
+        [Fact]
+        public async Task ShopTransactionService_ActiveSale_MultipliesBuyAndSellPrices()
+        {
+            string dbPath = Path.Combine(_tempDir, "sale_event_test.litedb");
+            using var storage = new LiteDbStorage(dbPath);
+            await storage.InitializeAsync();
+
+            var eco = new EconomyService(storage, () => Money.Zero, () => null, true, new TestMainThreadDispatcher());
+            var shop = new ShopService(_tempDir);
+            shop.AddOrUpdateItem(new ItemShopEntry
+            {
+                Id = 2001,
+                Name = "Rifle",
+                BuyPrice = 100m,
+                SellPrice = 50m,
+                Category = "Guns",
+                Enabled = true
+            });
+
+            var inventory = new MockInventoryGateway();
+            var vehicle = new MockVehicleGateway();
+            var cfg = new KizShopConfiguration { MaxTransactionAmount = 1000000m };
+            var tx = new ShopTransactionService(shop, eco, inventory, vehicle, () => cfg, _clock, null, storage);
+
+            // Without sale: Buy = $100, Sell = $50
+            var (normalBuy, _) = await tx.GetEffectiveBuyPriceAsync(shop.ResolveItem("2001").Entry, 1);
+            var (normalSell, _) = await tx.GetEffectiveSellPriceAsync(shop.ResolveItem("2001").Entry, 1);
+            Assert.Equal(Money.FromDecimal(100m), normalBuy);
+            Assert.Equal(Money.FromDecimal(50m), normalSell);
+
+            // Start sale: 20% discount on buy (x0.8), +50% bonus on sell (x1.5)
+            shop.StartSale(0.8m, 1.5m, 60, "Weekend Frenzy");
+
+            var (saleBuy, _) = await tx.GetEffectiveBuyPriceAsync(shop.ResolveItem("2001").Entry, 1);
+            var (saleSell, _) = await tx.GetEffectiveSellPriceAsync(shop.ResolveItem("2001").Entry, 1);
+            Assert.Equal(Money.FromDecimal(80m), saleBuy);
+            Assert.Equal(Money.FromDecimal(75m), saleSell);
+
+            // Clear sale: returns to normal
+            shop.ClearSale();
+            var (clearedBuy, _) = await tx.GetEffectiveBuyPriceAsync(shop.ResolveItem("2001").Entry, 1);
+            Assert.Equal(Money.FromDecimal(100m), clearedBuy);
+        }
+
+        [Fact]
+        public async Task Storage_TransactionHistoryAndExport_RecordsAndExportsAccurately()
+        {
+            string dbPath = Path.Combine(_tempDir, "tx_history_export_test.litedb");
+            using var storage = new LiteDbStorage(dbPath, _clock);
+            await storage.InitializeAsync();
+
+            ulong steamId = 76561198000000555UL;
+            await storage.SetBalanceAsync(steamId, Money.FromDecimal(500m), "Initial");
+            await storage.LogTransactionAsync(steamId, "ShopBuy", Money.FromDecimal(50m), "Bought Item 363");
+            await storage.LogTransactionAsync(steamId, "ShopSell", Money.FromDecimal(30m), "Sold Item 97");
+
+            // 1. In-game history query
+            var history = await storage.GetTransactionHistoryAsync(steamId, 10, 0);
+            Assert.Equal(3, history.Count); // SetBalance, ShopBuy, ShopSell
+            Assert.Contains(history, h => h.Type == "ShopBuy");
+            Assert.Contains(history, h => h.Type == "ShopSell");
+
+            // 2. Data export service
+            var exporter = new DataExportService(storage);
+            string accCsvPath = Path.Combine(_tempDir, "accounts_export.csv");
+            string txCsvPath = Path.Combine(_tempDir, "tx_export.csv");
+
+            int accCount = await exporter.ExportAccountsToCsvAsync(accCsvPath);
+            Assert.Equal(1, accCount);
+            Assert.True(File.Exists(accCsvPath));
+            string accCsv = File.ReadAllText(accCsvPath);
+            Assert.Contains(steamId.ToString(), accCsv);
+
+            int txCount = await exporter.ExportTransactionsToCsvAsync(txCsvPath);
+            Assert.Equal(3, txCount);
+            Assert.True(File.Exists(txCsvPath));
+            string txCsv = File.ReadAllText(txCsvPath);
+            Assert.Contains("Bought Item 363", txCsv);
+            Assert.Contains("Sold Item 97", txCsv);
         }
     }
 }

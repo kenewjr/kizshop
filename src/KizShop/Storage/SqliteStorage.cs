@@ -664,6 +664,140 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
+        public async Task<List<TransactionRecord>> GetTransactionHistoryAsync(ulong steamId, int limit, int offset)
+        {
+            if (limit <= 0) limit = 10;
+            if (offset < 0) offset = 0;
+
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        SELECT timestamp, steam_id, type, amount, details
+                        FROM kiz_transactions
+                        WHERE steam_id = @id
+                        ORDER BY rowid DESC
+                        LIMIT @limit OFFSET @offset;
+                    ";
+                    cmd.Parameters.AddWithValue("@id", steamId.ToString());
+                    cmd.Parameters.AddWithValue("@limit", limit);
+                    cmd.Parameters.AddWithValue("@offset", offset);
+
+                    var list = new List<TransactionRecord>();
+                    using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        DateTime ts = DateTime.TryParse(reader.GetString(0), out var dt) ? dt : DateTime.UtcNow;
+                        ulong sId = ulong.TryParse(reader.GetString(1), out var sid) ? sid : steamId;
+                        string type = reader.IsDBNull(2) ? "General" : reader.GetString(2);
+                        long amountCents = reader.GetInt64(3);
+                        string details = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+
+                        list.Add(new TransactionRecord
+                        {
+                            Timestamp = ts,
+                            SteamId = sId,
+                            Type = type,
+                            Amount = Money.FromCents(amountCents),
+                            Details = details
+                        });
+                    }
+                    return list;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<TransactionRecord>> GetAllTransactionsAsync(int limit, int offset)
+        {
+            if (limit <= 0) limit = 50;
+            if (offset < 0) offset = 0;
+
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        SELECT timestamp, steam_id, type, amount, details
+                        FROM kiz_transactions
+                        ORDER BY rowid DESC
+                        LIMIT @limit OFFSET @offset;
+                    ";
+                    cmd.Parameters.AddWithValue("@limit", limit);
+                    cmd.Parameters.AddWithValue("@offset", offset);
+
+                    var list = new List<TransactionRecord>();
+                    using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        DateTime ts = DateTime.TryParse(reader.GetString(0), out var dt) ? dt : DateTime.UtcNow;
+                        ulong sId = ulong.TryParse(reader.GetString(1), out var sid) ? sid : 0;
+                        string type = reader.IsDBNull(2) ? "General" : reader.GetString(2);
+                        long amountCents = reader.GetInt64(3);
+                        string details = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+
+                        list.Add(new TransactionRecord
+                        {
+                            Timestamp = ts,
+                            SteamId = sId,
+                            Type = type,
+                            Amount = Money.FromCents(amountCents),
+                            Details = details
+                        });
+                    }
+                    return list;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<List<(ulong SteamId, Money Balance)>> GetAllAccountsAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT steam_id, balance FROM kiz_accounts ORDER BY steam_id ASC;";
+
+                    var list = new List<(ulong SteamId, Money Balance)>();
+                    using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        ulong sId = ulong.TryParse(reader.GetString(0), out var sid) ? sid : 0;
+                        long cents = reader.GetInt64(1);
+                        list.Add((sId, Money.FromCents(cents)));
+                    }
+                    return list;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
         public async Task<bool> TryRecordRewardEventAsync(string eventKey, string bossName, Money pool, DateTime utc)
         {
             if (string.IsNullOrEmpty(eventKey)) return false;
