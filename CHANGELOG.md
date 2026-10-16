@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-16
+
+### Added
+- **Bundle Kits (`/kit`, `/buykit`)**:
+  - Added kit shop system with atomic delivery and rollback refund safety.
+  - Included 4 default kits: starter ($1,000), hunter ($2,000), rifle ($3,000), sniper ($3,000).
+  - Cooldown and combat tag integration.
+- **Daily Login Reward Reminders (`/daily`)**:
+  - Automated friendly chat notification sent 4 seconds after player connection if daily reward is unclaimed.
+  - Storage methods (`CanClaimDailyAsync`) checking claim availability without mutating streak.
+- **Admin Money Giveaway (`/giveaway`, `/eco giveaway`)**:
+  - Real-time money distribution to all currently connected players with server-wide broadcast.
+  - Fully non-blocking concurrency with `RunOnMainThreadAsync` SteamID collection.
+- **Durability & Quality Price Scaling**:
+  - Item sell payouts scale linearly based on item durability (`quality / 100m`).
+  - Added `MinItemSellQuality` (default 10%) preventing sale of destroyed or severely damaged gear.
+- **In-Game Transaction History (`/history`, `/transaksi`)**:
+  - Paginated transaction logs in chat displaying timestamp, action type, amount (+/- green/red), and details.
+- **Global Sale Events & Happy Hour (`/kizshop sale`)**:
+  - Temporary server-wide buy discount and sell bonus multipliers with auto-expiration.
+  - Applies across items, vehicles, and bundle kits with server broadcast announcement.
+- **CSV Data Export (`/kizshop export`)**:
+  - Standalone admin backup dumping accounts or transaction logs into CSV files in `exports/` folder.
+- **Multi-Word Parser Support**:
+  - Multi-word queries for items, player names, categories, and vehicle names now supported without strict quotes across all commands.
+
+### Fixed
+- Replaced fragile `Task.Delay` in main-thread dispatchers with deterministic `RunOnMainThreadAsync`.
+- Differentiated kit space exhaustion returning `kit_no_space` instead of generic `kit_delivery_failed`.
+
 ## [0.4.1] - 2026-10-13
 
 ### Fixed

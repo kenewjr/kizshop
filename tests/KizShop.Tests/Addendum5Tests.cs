@@ -67,18 +67,18 @@ namespace KizShop.Tests
 
             Assert.NotNull(buildInfo);
             Assert.StartsWith("[KizShop] Loaded v", buildInfo);
-            Assert.Contains("0.4.1", buildInfo);
+            Assert.Contains("0.5.0", buildInfo);
             Assert.Contains("build", buildInfo);
             Assert.Contains("main thread id 42", buildInfo);
         }
 
         [Fact]
-        public void Assembly_HasInformationalVersionAttribute_SetTo0_4_1()
+        public void Assembly_HasInformationalVersionAttribute_SetToVersion()
         {
             var asm = typeof(KizShopPlugin).Assembly;
             var attr = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
             Assert.NotNull(attr);
-            Assert.StartsWith("0.4.1", attr.InformationalVersion);
+            Assert.StartsWith("0.5.0", attr.InformationalVersion);
         }
 
         // ==========================================
