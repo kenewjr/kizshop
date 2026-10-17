@@ -88,6 +88,30 @@ namespace KizShop.Discord
             await PostPayloadAsync(new { embeds = new[] { embed } }).ConfigureAwait(false);
         }
 
+        public async Task SendGiveawayAlertAsync(string adminName, ulong adminSteamId, Money amountPerPlayer, int recipientCount, Money totalAmount)
+        {
+            var cfg = _configProvider();
+            if (!cfg.DiscordWebhookEnabled || string.IsNullOrWhiteSpace(cfg.DiscordWebhookUrl)) return;
+            if (!cfg.DiscordLogAdminEco) return;
+
+            var embed = new
+            {
+                title = "🎁 Giveaway Distribution",
+                color = 0x9B59B6, // Purple
+                description = $"Admin **{adminName}** (`{adminSteamId}`) distributed giveaway to **{recipientCount}** online players",
+                fields = new[]
+                {
+                    new { name = "Amount Per Player", value = $"{cfg.CurrencySymbol}{amountPerPlayer.ToDecimal():N2}", inline = true },
+                    new { name = "Recipients", value = recipientCount.ToString(), inline = true },
+                    new { name = "Total Distributed", value = $"{cfg.CurrencySymbol}{totalAmount.ToDecimal():N2}", inline = true }
+                },
+                timestamp = DateTime.UtcNow.ToString("o"),
+                footer = new { text = "KizShop Audit" }
+            };
+
+            await PostPayloadAsync(new { embeds = new[] { embed } }).ConfigureAwait(false);
+        }
+
         public async Task SendLargeTransactionAlertAsync(ulong steamId, string type, Money amount, string details)
         {
             var cfg = _configProvider();

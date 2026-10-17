@@ -97,6 +97,13 @@ namespace KizShop
         public int DailyResetUtcOffsetHours { get; set; } = 7;
         public bool DailyReminderOnJoin { get; set; } = true;
 
+        // Sale Event Limits
+        public decimal SaleMinBuyMultiplier { get; set; } = 0.10m;
+        public decimal SaleMaxSellMultiplier { get; set; } = 2.00m;
+
+        // Giveaway Safeguards
+        public decimal GiveawayMaxPerPlayer { get; set; } = 1000.00m;
+
         public void LoadDefaults()
         {
             DatabaseType = "LiteDB";
@@ -175,6 +182,10 @@ namespace KizShop
             DailyMaxStreakDays = 7;
             DailyResetUtcOffsetHours = 7;
             DailyReminderOnJoin = true;
+
+            SaleMinBuyMultiplier = 0.10m;
+            SaleMaxSellMultiplier = 2.00m;
+            GiveawayMaxPerPlayer = 1000.00m;
         }
 
         public void Normalize()
@@ -247,6 +258,25 @@ namespace KizShop
             {
                 Common.KizLog.Warning($"[KizShop] Configuration VehicleCooldownSeconds ({VehicleCooldownSeconds}) corrected to 0.");
                 VehicleCooldownSeconds = 0;
+            }
+
+            if (SaleMinBuyMultiplier < 0.01m || SaleMinBuyMultiplier > 1.00m)
+            {
+                decimal clamped = System.Math.Clamp(SaleMinBuyMultiplier, 0.01m, 1.00m);
+                Common.KizLog.Warning($"[KizShop] Configuration SaleMinBuyMultiplier ({SaleMinBuyMultiplier}) clamped to {clamped}.");
+                SaleMinBuyMultiplier = clamped;
+            }
+
+            if (SaleMaxSellMultiplier < 1.00m)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration SaleMaxSellMultiplier ({SaleMaxSellMultiplier}) corrected to 1.00.");
+                SaleMaxSellMultiplier = 1.00m;
+            }
+
+            if (GiveawayMaxPerPlayer < 0m)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration GiveawayMaxPerPlayer ({GiveawayMaxPerPlayer}) corrected to 0.");
+                GiveawayMaxPerPlayer = 0m;
             }
         }
     }

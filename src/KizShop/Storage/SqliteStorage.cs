@@ -122,6 +122,13 @@ namespace KizShop.Storage
                             last_claimed_utc TEXT NOT NULL
                         );
 
+                        CREATE TABLE IF NOT EXISTS kiz_kit_cooldowns (
+                            steam_id TEXT NOT NULL,
+                            kit_name TEXT NOT NULL,
+                            last_purchase TEXT NOT NULL,
+                            PRIMARY KEY (steam_id, kit_name)
+                        );
+
                         INSERT OR IGNORE INTO schema_version (version, applied_at) 
                         VALUES (3, datetime('now'));
                     ";
@@ -1550,6 +1557,89 @@ namespace KizShop.Storage
                         cmd.Parameters.AddWithValue("@d", previousDayIndex);
                         cmd.Parameters.AddWithValue("@s", previousStreak);
                     }
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName)
+        {
+            return await Task.Run<DateTime?>(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT last_purchase FROM kiz_kit_cooldowns WHERE steam_id = @steam_id AND kit_name = @kit_name LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@steam_id", steamId.ToString());
+                    cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
+
+                    var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    if (result != null && result != DBNull.Value && DateTime.TryParse(result.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dt))
+                    {
+                        return dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
+                    }
+                    return null;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc)
+        {
+            await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        INSERT INTO kiz_kit_cooldowns (steam_id, kit_name, last_purchase)
+                        VALUES (@steam_id, @kit_name, @last_purchase)
+                        ON CONFLICT(steam_id, kit_name) DO UPDATE SET
+                            last_purchase = excluded.last_purchase;
+                    ";
+                    cmd.Parameters.AddWithValue("@steam_id", steamId.ToString());
+                    cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
+                    cmd.Parameters.AddWithValue("@last_purchase", lastPurchaseUtc.ToString("o"));
+
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task ClearKitCooldownAsync(ulong steamId, string kitName)
+        {
+            await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "DELETE FROM kiz_kit_cooldowns WHERE steam_id = @steam_id AND kit_name = @kit_name;";
+                    cmd.Parameters.AddWithValue("@steam_id", steamId.ToString());
+                    cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
+
                     await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
                 finally

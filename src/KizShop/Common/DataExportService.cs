@@ -35,6 +35,21 @@ namespace KizShop.Common
             return accounts.Count;
         }
 
+        public static string EscapeCsvText(string input)
+        {
+            if (input == null) input = string.Empty;
+            input = input.Replace("\r\n", " ").Replace("\r", " ").Replace("\n", " ");
+            if (input.Length > 0)
+            {
+                char first = input[0];
+                if (first == '=' || first == '+' || first == '-' || first == '@' || first == '\t' || first == '\r')
+                {
+                    input = "'" + input;
+                }
+            }
+            return "\"" + input.Replace("\"", "\"\"") + "\"";
+        }
+
         public async Task<int> ExportTransactionsToCsvAsync(string filePath, int maxRows = 10000)
         {
             var txs = await _storage.GetAllTransactionsAsync(maxRows, 0).ConfigureAwait(false);
@@ -48,8 +63,9 @@ namespace KizShop.Common
             sb.AppendLine("TimestampUtc,SteamID64,Type,AmountDecimal,AmountCents,Details");
             foreach (var tx in txs)
             {
-                string safeDetails = "\"" + (tx.Details ?? "").Replace("\"", "\"\"") + "\"";
-                sb.AppendLine($"{tx.Timestamp:yyyy-MM-dd HH:mm:ss},{tx.SteamId},{tx.Type},{tx.Amount.ToDecimal():F2},{tx.Amount.Cents},{safeDetails}");
+                string safeType = EscapeCsvText(tx.Type);
+                string safeDetails = EscapeCsvText(tx.Details);
+                sb.AppendLine($"{tx.Timestamp:yyyy-MM-dd HH:mm:ss},{tx.SteamId},{safeType},{tx.Amount.ToDecimal():F2},{tx.Amount.Cents},{safeDetails}");
             }
 
             await Task.Run(() => File.WriteAllText(filePath, sb.ToString(), Encoding.UTF8)).ConfigureAwait(false);

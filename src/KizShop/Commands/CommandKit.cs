@@ -10,10 +10,10 @@ namespace KizShop.Commands
     public class CommandKit : IRocketCommand
     {
         public AllowedCaller AllowedCaller => AllowedCaller.Player;
-        public string Name => "kit";
+        public string Name => "kizkit";
         public string Help => "View available shop kits or purchase a bundle kit.";
         public string Syntax => "[kit name]";
-        public List<string> Aliases => new List<string> { "kits", "buykit" };
+        public List<string> Aliases => new List<string> { "buykit" };
         public List<string> Permissions => new List<string> { "kizshop.kit" };
 
         public void Execute(IRocketPlayer caller, string[] command)

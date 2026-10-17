@@ -232,6 +232,27 @@ namespace KizShop.Tests
             Assert.True(resRetry.Allowed);
             Assert.Equal(2, resRetry.Streak);
         }
+
+        [Fact]
+        public async Task KitCooldown_PersistsAndClearsCorrectly()
+        {
+            ulong steamId = 76561198000000099;
+            string kitName = "Starter";
+            var now = new DateTime(2026, 10, 17, 10, 0, 0, DateTimeKind.Utc);
+
+            var initial = await _storage.GetKitCooldownAsync(steamId, kitName);
+            Assert.Null(initial);
+
+            await _storage.SetKitCooldownAsync(steamId, kitName, now);
+
+            var retrieved = await _storage.GetKitCooldownAsync(steamId, "starter");
+            Assert.NotNull(retrieved);
+            Assert.Equal(now, retrieved.Value);
+
+            await _storage.ClearKitCooldownAsync(steamId, "STARTER");
+            var afterClear = await _storage.GetKitCooldownAsync(steamId, kitName);
+            Assert.Null(afterClear);
+        }
     }
 
     public class SqliteStorageTests : StorageTestBase

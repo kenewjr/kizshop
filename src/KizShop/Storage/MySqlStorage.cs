@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Globalization;
 using System.Threading.Tasks;
 using MySqlConnector;
 using KizShop.Common;
@@ -99,6 +100,13 @@ namespace KizShop.Storage
                         last_claim_day_index INT NOT NULL,
                         streak INT NOT NULL,
                         last_claimed_utc DATETIME(3) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+                    CREATE TABLE IF NOT EXISTS kiz_kit_cooldowns (
+                        steam_id BIGINT UNSIGNED NOT NULL,
+                        kit_name VARCHAR(64) NOT NULL,
+                        last_purchase DATETIME(3) NOT NULL,
+                        PRIMARY KEY (steam_id, kit_name)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
                     INSERT IGNORE INTO schema_version (version, applied_at)
@@ -1256,6 +1264,65 @@ namespace KizShop.Storage
                     cmd.Parameters.AddWithValue("@d", previousDayIndex);
                     cmd.Parameters.AddWithValue("@s", previousStreak);
                 }
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName)
+        {
+            return await Task.Run<DateTime?>(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT last_purchase FROM kiz_kit_cooldowns WHERE steam_id = @steam_id AND kit_name = @kit_name LIMIT 1;";
+                cmd.Parameters.AddWithValue("@steam_id", steamId);
+                cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
+
+                var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                if (result != null && result != DBNull.Value && DateTime.TryParse(result.ToString(), null, DateTimeStyles.RoundtripKind, out var dt))
+                {
+                    return (DateTime?)DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+                }
+                return null;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc)
+        {
+            await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
+                    INSERT INTO kiz_kit_cooldowns (steam_id, kit_name, last_purchase)
+                    VALUES (@steam_id, @kit_name, @last_purchase)
+                    ON DUPLICATE KEY UPDATE
+                        last_purchase = VALUES(last_purchase);
+                ";
+                cmd.Parameters.AddWithValue("@steam_id", steamId);
+                cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
+                cmd.Parameters.AddWithValue("@last_purchase", lastPurchaseUtc);
+
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task ClearKitCooldownAsync(ulong steamId, string kitName)
+        {
+            await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM kiz_kit_cooldowns WHERE steam_id = @steam_id AND kit_name = @kit_name;";
+                cmd.Parameters.AddWithValue("@steam_id", steamId);
+                cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
+
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         }

@@ -60,15 +60,17 @@ namespace KizShop.Shop
             ItemDynamicPricingConfig cfg,
             decimal buyPressure,
             decimal sellPressure,
-            bool allowSellAboveBuy)
+            bool allowSellAboveBuy,
+            decimal buyMultiplier = 1.0m,
+            decimal sellMultiplier = 1.0m)
         {
             decimal sellMult = ComputeEffectiveSellMultiplier(cfg, sellPressure);
-            decimal effSell = baseSellPrice * sellMult;
+            decimal effSell = baseSellPrice * sellMult * sellMultiplier;
 
             if (!allowSellAboveBuy && baseBuyPrice > 0m)
             {
                 decimal buyMult = ComputeEffectiveBuyMultiplier(cfg, buyPressure);
-                decimal effBuy = baseBuyPrice * buyMult;
+                decimal effBuy = baseBuyPrice * buyMult * buyMultiplier;
                 if (effSell > effBuy)
                 {
                     effSell = effBuy;

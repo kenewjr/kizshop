@@ -46,7 +46,7 @@ namespace KizShop
         private readonly ConcurrentDictionary<(ulong killer, ulong victim), DateTime> _killCooldowns =
             new ConcurrentDictionary<(ulong killer, ulong victim), DateTime>();
 
-        public override TranslationList DefaultTranslations => new TranslationList
+        private static readonly TranslationList _defaultTranslations = new TranslationList
         {
             { "currency_format", "{0}{1:N2} {2}" },
             { "plugin_offline", "<color=red>KizShop is currently offline.</color>" },
@@ -124,7 +124,7 @@ namespace KizShop
 
             { "kit_list_header", "<color=cyan>--- Available KizShop Kits ---</color>" },
             { "kit_list_entry", "<color=yellow>{0}</color> ({1}) - <color=green>{2}</color>: {3}" },
-            { "kit_list_footer", "Use /buykit <name> or /kit <name> to purchase." },
+            { "kit_list_footer", "Use /kizkit <name> or /buykit <name> to purchase." },
             { "kit_none_available", "<color=yellow>No kits are currently available in the shop.</color>" },
             { "kit_not_found", "<color=red>Kit '{0}' not found in shop.</color>" },
             { "kit_disabled", "<color=red>This kit is currently disabled.</color>" },
@@ -213,8 +213,12 @@ namespace KizShop
             { "daily_payout_failed", "<color=red>Failed to deposit daily reward. Please contact an admin.</color>" },
             { "daily_success", "<color=green>Claimed daily reward: {0}! Current streak: {1}/{2} days.</color>" },
 
-            { "giveaway_usage", "Usage: /giveaway <amount>" },
+            { "giveaway_usage", "Usage: /giveaway <amount|confirm>" },
             { "giveaway_invalid_amount", "<color=red>Invalid giveaway amount: {0}</color>" },
+            { "giveaway_exceeds_max", "<color=red>Giveaway amount ({0}) exceeds maximum allowed per player ({1}).</color>" },
+            { "giveaway_confirm_prompt", "<color=yellow>Giveaway: {0} per player x {1} players = total {2}. Type <color=green>/giveaway confirm</color> within 30s to proceed.</color>" },
+            { "giveaway_no_pending", "<color=red>No pending giveaway confirmation found.</color>" },
+            { "giveaway_expired", "<color=red>Giveaway confirmation expired. Please run the command again.</color>" },
             { "giveaway_no_players", "<color=yellow>No online players found to receive giveaway.</color>" },
             { "giveaway_broadcast", "<color=yellow>[GIVEAWAY] {0} gave {1} to all online players ({2} players)!</color>" },
             { "giveaway_success", "<color=green>Successfully distributed {0} to {1} online players.</color>" },
@@ -224,6 +228,7 @@ namespace KizShop
             { "history_empty", "No transaction history found." },
 
             { "sale_usage", "Usage: /kizshop sale <buyMultiplier> <sellMultiplier> <durationMinutes> [name] | /kizshop sale clear" },
+            { "sale_invalid_params", "<color=red>Invalid sale parameters. Buy: {0:0.##}-{1:0.##}, Sell: {2:0.##}-{3:0.##}, Duration: 1-1440m.</color>" },
             { "sale_status", "<color=cyan>[SALE ACTIVE] {0} - Buy: x{1}, Sell: x{2} ({3}m remaining)</color>" },
             { "sale_started", "<color=green>Started sale '{0}' (Buy x{1}, Sell x{2}) for {3} minutes.</color>" },
             { "sale_cleared", "<color=green>Active sale event has been cleared.</color>" },
@@ -233,6 +238,8 @@ namespace KizShop
             { "kizshop_export_usage", "Usage: /kizshop export <accounts|transactions>" },
             { "kizshop_export_success", "<color=green>Exported {0} rows to {1}.</color>" }
         };
+
+        public override TranslationList DefaultTranslations => _defaultTranslations;
 
         protected override void Load()
         {
@@ -493,32 +500,132 @@ namespace KizShop
 
         public void MigrateTranslationsOnDisk(string directoryPath = null)
         {
+            MigrateTranslations(directoryPath ?? Directory);
+        }
+
+        public static void MigrateTranslations(string targetDir)
+        {
             try
             {
-                string targetDir = directoryPath ?? Directory;
                 if (string.IsNullOrEmpty(targetDir) || !System.IO.Directory.Exists(targetDir)) return;
+
+                var knownKeys = new System.Collections.Generic.HashSet<string>(System.Linq.Enumerable.Select(_defaultTranslations, t => t.Id), StringComparer.OrdinalIgnoreCase);
 
                 foreach (var file in System.IO.Directory.GetFiles(targetDir, "*.translation.xml"))
                 {
-                    string content = System.IO.File.ReadAllText(file);
-                    if (content.IndexOf("gold", StringComparison.OrdinalIgnoreCase) >= 0)
+                    try
                     {
-                        string updated = System.Text.RegularExpressions.Regex.Replace(
-                            content,
-                            @"(&lt;|<)color\s*=\s*['""]?gold['""]?(&gt;|>)",
-                            "$1color=yellow$2",
-                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-                        if (content != updated)
+                        string rawText = System.IO.File.ReadAllText(file);
+                        bool hadRawAngleInValue = rawText.IndexOf("Value=\"<", StringComparison.OrdinalIgnoreCase) >= 0;
+                        string parseable = rawText;
+                        if (hadRawAngleInValue)
                         {
-                            System.IO.File.WriteAllText(file, updated);
+                            parseable = System.Text.RegularExpressions.Regex.Replace(
+                                rawText,
+                                @"Value=""([^""]*)""",
+                                m => m.Value.Replace("<", "&lt;"));
                         }
+
+                        System.Xml.Linq.XDocument doc = System.Xml.Linq.XDocument.Parse(parseable, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+
+                        bool modified = false;
+                        foreach (var elem in doc.Descendants())
+                        {
+                            var idAttr = elem.Attribute("Id") ?? elem.Attribute("id");
+                            if (idAttr != null && knownKeys.Contains(idAttr.Value))
+                            {
+                                var valAttr = elem.Attribute("Value") ?? elem.Attribute("value");
+                                if (valAttr != null)
+                                {
+                                    string original = valAttr.Value;
+                                    if (original.IndexOf("gold", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        string updated = System.Text.RegularExpressions.Regex.Replace(
+                                            original,
+                                            @"(&lt;|<)color\s*=\s*['""]?gold['""]?(&gt;|>)",
+                                            "$1color=yellow$2",
+                                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                                        if (original != updated)
+                                        {
+                                            valAttr.Value = updated;
+                                            modified = true;
+                                        }
+                                    }
+                                }
+                                else if (!string.IsNullOrEmpty(elem.Value) && elem.Value.IndexOf("gold", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    string original = elem.Value;
+                                    string updated = System.Text.RegularExpressions.Regex.Replace(
+                                        original,
+                                        @"(&lt;|<)color\s*=\s*['""]?gold['""]?(&gt;|>)",
+                                        "$1color=yellow$2",
+                                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                                    if (original != updated)
+                                    {
+                                        elem.Value = updated;
+                                        modified = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (modified)
+                        {
+                            string bakFile = file + ".bak";
+                            if (!System.IO.File.Exists(bakFile))
+                            {
+                                System.IO.File.Copy(file, bakFile);
+                            }
+
+                            string outputXml = doc.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+                            if (doc.Declaration != null)
+                            {
+                                outputXml = doc.Declaration.ToString() + "\r\n" + outputXml;
+                            }
+                            else if (rawText.StartsWith("<?xml", StringComparison.OrdinalIgnoreCase))
+                            {
+                                int declEnd = rawText.IndexOf("?>");
+                                if (declEnd >= 0)
+                                {
+                                    string decl = rawText.Substring(0, declEnd + 2);
+                                    outputXml = decl + "\r\n" + outputXml;
+                                }
+                            }
+
+                            if (hadRawAngleInValue)
+                            {
+                                foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(rawText, @"Id=""([^""]+)""\s+Value=""<color=gold>"))
+                                {
+                                    string id = match.Groups[1].Value;
+                                    outputXml = outputXml.Replace($@"Id=""{id}"" Value=""&lt;color=yellow&gt;", $@"Id=""{id}"" Value=""<color=yellow>");
+                                }
+                            }
+
+                            string tempFile = System.IO.Path.Combine(targetDir, System.IO.Path.GetRandomFileName() + ".tmp");
+                            System.IO.File.WriteAllText(tempFile, outputXml, System.Text.Encoding.UTF8);
+
+                            try
+                            {
+                                System.IO.File.Replace(tempFile, file, null);
+                            }
+                            catch
+                            {
+                                System.IO.File.Copy(tempFile, file, overwrite: true);
+                                System.IO.File.Delete(tempFile);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        KizLog.Error($"[KizShop] Failed to migrate translations for {file}: {ex}");
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore migration exceptions during headless or permission-restricted environments
+                KizLog.Error($"[KizShop] Error in MigrateTranslationsOnDisk: {ex}");
             }
         }
 
@@ -559,7 +666,7 @@ namespace KizShop
                 if (!onCooldown)
                 {
                     _killCooldowns[key] = now;
-                    Task.Run(async () =>
+                    SafeRunAsync(async () =>
                     {
                         await Economy.DepositAsync(killer.CSteamID.m_SteamID, reward, $"KillReward:{player.CharacterName}").ConfigureAwait(false);
                         Dispatcher.QueueOnMainThread(() =>
@@ -567,48 +674,41 @@ namespace KizShop
                             var formatted = FormatMoney(reward);
                             KizChat.Say(killer, Translate("reward_player_kill", formatted, player.CharacterName), UnityEngine.Color.green);
                         });
-                    });
+                    }, $"KillReward:{killer.CSteamID.m_SteamID}");
                 }
             }
 
             // 2. Process Bounty Claim (bounties are NOT blocked by kill reward cooldown)
             if (Storage != null && Configuration.Instance.BountyEnabled)
             {
-                Task.Run(async () =>
+                SafeRunAsync(async () =>
                 {
-                    try
+                    var (claimedEntries, claimedTotal) = await Storage.ClaimBountiesAsync(player.CSteamID.m_SteamID, killer.CSteamID.m_SteamID).ConfigureAwait(false);
+                    if (claimedTotal > Money.Zero)
                     {
-                        var (claimedEntries, claimedTotal) = await Storage.ClaimBountiesAsync(player.CSteamID.m_SteamID, killer.CSteamID.m_SteamID).ConfigureAwait(false);
-                        if (claimedTotal > Money.Zero)
+                        var dep = await Economy.DepositAsync(killer.CSteamID.m_SteamID, claimedTotal, $"BountyClaim:{player.CharacterName}").ConfigureAwait(false);
+                        if (!dep.Success)
                         {
-                            var dep = await Economy.DepositAsync(killer.CSteamID.m_SteamID, claimedTotal, $"BountyClaim:{player.CharacterName}").ConfigureAwait(false);
-                            if (!dep.Success)
+                            Logger.LogError($"[KizShop] Deposit failed for claimed bounty of {claimedTotal} to {killer.CSteamID}. Re-creating original bounty rows.");
+                            foreach (var entry in claimedEntries)
                             {
-                                Logger.LogError($"[KizShop] Deposit failed for claimed bounty of {claimedTotal} to {killer.CSteamID}. Re-creating original bounty rows.");
-                                foreach (var entry in claimedEntries)
-                                {
-                                    await Storage.CreateBountyAsync(entry.PlacerSteamId, entry.TargetSteamId, entry.EscrowAmount, entry.NetAmount, entry.CreatedUtc).ConfigureAwait(false);
-                                }
-                            }
-                            else
-                            {
-                                Dispatcher.QueueOnMainThread(() =>
-                                {
-                                    var formatted = FormatMoney(claimedTotal);
-                                    KizChat.Say(killer, Translate("bounty_claimed_killer", formatted, player.CharacterName), UnityEngine.Color.green);
-                                    if (Configuration.Instance.BountyAnnounceInChat)
-                                    {
-                                        KizChat.Broadcast(Translate("bounty_claimed_broadcast", killer.CharacterName, formatted, player.CharacterName), UnityEngine.Color.yellow);
-                                    }
-                                });
+                                await Storage.CreateBountyAsync(entry.PlacerSteamId, entry.TargetSteamId, entry.EscrowAmount, entry.NetAmount, entry.CreatedUtc).ConfigureAwait(false);
                             }
                         }
+                        else
+                        {
+                            Dispatcher.QueueOnMainThread(() =>
+                            {
+                                var formatted = FormatMoney(claimedTotal);
+                                KizChat.Say(killer, Translate("bounty_claimed_killer", formatted, player.CharacterName), UnityEngine.Color.green);
+                                if (Configuration.Instance.BountyAnnounceInChat)
+                                {
+                                    KizChat.Broadcast(Translate("bounty_claimed_broadcast", killer.CharacterName, formatted, player.CharacterName), UnityEngine.Color.yellow);
+                                }
+                            });
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        Logger.LogError($"[KizShop] Error processing bounty claim: {ex}");
-                    }
-                });
+                }, $"BountyClaim:{killer.CSteamID.m_SteamID}");
             }
         }
 
@@ -654,34 +754,36 @@ namespace KizShop
                 if (player != null && player.playerID != null)
                 {
                     ulong steamId = player.playerID.steamID.m_SteamID;
-                    _ = Economy?.GetBalanceAsync(steamId);
+                    SafeRunAsync(async () =>
+                    {
+                        if (Economy != null)
+                        {
+                            await Economy.GetBalanceAsync(steamId).ConfigureAwait(false);
+                        }
+                    }, $"PreloadBalance:{steamId}");
 
                     if (Configuration.Instance.DailyRewardEnabled && Configuration.Instance.DailyReminderOnJoin && Storage != null)
                     {
-                        Task.Run(async () =>
+                        SafeRunAsync(async () =>
                         {
-                            try
-                            {
-                                await Task.Delay(4000).ConfigureAwait(false);
-                                var clock = Clock;
-                                DateTime nowUtc = clock.UtcNow;
-                                DateTime localNow = nowUtc.AddHours(Configuration.Instance.DailyResetUtcOffsetHours);
-                                int currentDayIndex = (int)(localNow.Date - new DateTime(2000, 1, 1)).TotalDays;
+                            await Task.Delay(4000).ConfigureAwait(false);
+                            var clock = Clock;
+                            DateTime nowUtc = clock.UtcNow;
+                            DateTime localNow = nowUtc.AddHours(Configuration.Instance.DailyResetUtcOffsetHours);
+                            int currentDayIndex = (int)(localNow.Date - new DateTime(2000, 1, 1)).TotalDays;
 
-                                if (Storage != null && await Storage.CanClaimDailyAsync(steamId, currentDayIndex).ConfigureAwait(false))
+                            if (Storage != null && await Storage.CanClaimDailyAsync(steamId, currentDayIndex).ConfigureAwait(false))
+                            {
+                                Dispatcher.QueueOnMainThread(() =>
                                 {
-                                    Dispatcher.QueueOnMainThread(() =>
+                                    var uPlayer = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
+                                    if (uPlayer != null)
                                     {
-                                        var uPlayer = UnturnedPlayer.FromCSteamID(new CSteamID(steamId));
-                                        if (uPlayer != null)
-                                        {
-                                            KizChat.Say(uPlayer, Translate("daily_reminder"), UnityEngine.Color.yellow);
-                                        }
-                                    });
-                                }
+                                        KizChat.Say(uPlayer, Translate("daily_reminder"), UnityEngine.Color.yellow);
+                                    }
+                                });
                             }
-                            catch { }
-                        });
+                        }, $"DailyReminder:{steamId}");
                     }
                 }
             }
@@ -835,21 +937,34 @@ namespace KizShop
             }
 
             // Off main thread DB work
+            SafeRunAsync(async () =>
+            {
+                if (Economy == null) return;
+                await Economy.DepositAsync(player.CSteamID.m_SteamID, reward, $"ZombieReward:{stat}").ConfigureAwait(false);
+                Dispatcher.QueueOnMainThread(() =>
+                {
+                    var formatted = FormatMoney(reward);
+                    KizChat.Say(player, Translate(key, formatted), UnityEngine.Color.green);
+                });
+            }, $"ZombieReward:{stat}:{player.CSteamID.m_SteamID}");
+        }
+
+        public static void SafeRunAsync(Func<Task> taskFactory, string operationName = null)
+        {
+            if (taskFactory == null) return;
             Task.Run(async () =>
             {
                 try
                 {
-                    if (Economy == null) return;
-                    await Economy.DepositAsync(player.CSteamID.m_SteamID, reward, $"ZombieReward:{stat}").ConfigureAwait(false);
-                    Dispatcher.QueueOnMainThread(() =>
+                    var task = taskFactory();
+                    if (task != null)
                     {
-                        var formatted = FormatMoney(reward);
-                        KizChat.Say(player, Translate(key, formatted), UnityEngine.Color.green);
-                    });
+                        await task.ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogError($"[KizShop] Error processing zombie reward: {ex.Message}");
+                    Logger.LogError($"[KizShop] Async operation '{operationName ?? "unnamed"}' failed: {ex}");
                 }
             });
         }

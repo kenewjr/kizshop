@@ -185,13 +185,18 @@ namespace KizShop.Shop
             }
 
             var sale = _shopService?.ActiveSale;
-            if (sale != null && sale.IsActive(_clock.UtcNow) && sale.SellMultiplier != 1.0m)
+            decimal sMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+            long saleTotal = (long)Math.Round(basePrices.TotalPrice.Cents * sMult, MidpointRounding.AwayFromZero);
+            long saleUnit = (long)Math.Round(basePrices.FirstUnitPrice.Cents * sMult, MidpointRounding.AwayFromZero);
+
+            if (!cfg.AllowSellAboveBuy && entry.BuyPrice > 0m)
             {
-                long saleTotal = (long)Math.Round(basePrices.TotalPrice.Cents * sale.SellMultiplier, MidpointRounding.AwayFromZero);
-                long saleUnit = (long)Math.Round(basePrices.FirstUnitPrice.Cents * sale.SellMultiplier, MidpointRounding.AwayFromZero);
-                return (Money.FromCents(saleTotal), Money.FromCents(saleUnit));
+                var (buyTotal, buyUnit) = await GetEffectiveBuyPriceAsync(entry, quantity).ConfigureAwait(false);
+                if (saleTotal > buyTotal.Cents) saleTotal = buyTotal.Cents;
+                if (saleUnit > buyUnit.Cents) saleUnit = buyUnit.Cents;
             }
-            return basePrices;
+
+            return (Money.FromCents(saleTotal), Money.FromCents(saleUnit));
         }
 
         private void SafeRaiseItemPurchased(ulong steamId, ItemShopEntry entry, int quantity, Money totalMoney, Money newBal)
@@ -241,6 +246,23 @@ namespace KizShop.Shop
                 catch (Exception ex)
                 {
                     KizLog.Error($"[KizShop] Error in OnVehiclePurchased subscriber: {ex}");
+                }
+            }
+        }
+
+        private void SafeRaiseKitPurchased(ulong steamId, KitShopEntry entry, Money cost, Money newBal)
+        {
+            var handlers = OnKitPurchased?.GetInvocationList();
+            if (handlers == null) return;
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    ((Action<ulong, KitShopEntry, Money, Money>)handler)(steamId, entry, cost, newBal);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Error in OnKitPurchased subscriber: {ex}");
                 }
             }
         }
@@ -572,6 +594,7 @@ namespace KizShop.Shop
 
             var sale = _shopService?.ActiveSale;
             decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+            decimal buySaleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.BuyMultiplier : 1.0m;
 
             long totalPayoutCents = 0;
             decimal curSellPressure = startingSellPressure;
@@ -589,6 +612,21 @@ namespace KizShop.Shop
                     cfg.AllowSellAboveBuy);
 
                 decimal instanceVal = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
+                if (!cfg.AllowSellAboveBuy && entry.BuyPrice > 0m)
+                {
+                    var singleBuyMoney = PriceCalculator.CalculateSingleUnitBuyPrice(
+                        entry.BuyPrice,
+                        entry.SellPrice.Value,
+                        dynCfg,
+                        startingBuyPressure,
+                        curSellPressure,
+                        cfg.AllowSellAboveBuy);
+                    decimal maxBuyVal = singleBuyMoney.ToDecimal() * amountRatio * qualityRatio * buySaleMult;
+                    if (instanceVal > maxBuyVal)
+                    {
+                        instanceVal = maxBuyVal;
+                    }
+                }
                 long cents = (long)Math.Round(instanceVal * 100m, MidpointRounding.AwayFromZero);
                 totalPayoutCents += cents;
 
@@ -749,9 +787,19 @@ namespace KizShop.Shop
 
             var sale = _shopService?.ActiveSale;
             decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+            decimal buySaleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.BuyMultiplier : 1.0m;
 
             var singleUnitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, sellPressure, cfg.AllowSellAboveBuy);
             decimal finalDec = singleUnitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
+            if (!cfg.AllowSellAboveBuy && entry.BuyPrice > 0m)
+            {
+                var singleBuy = PriceCalculator.CalculateSingleUnitBuyPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, sellPressure, cfg.AllowSellAboveBuy);
+                decimal maxBuy = singleBuy.ToDecimal() * amountRatio * qualityRatio * buySaleMult;
+                if (finalDec > maxBuy)
+                {
+                    finalDec = maxBuy;
+                }
+            }
             var payout = Money.FromCents((long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero));
 
             if (!PlayerLock.TryAcquire(steamId))
@@ -928,6 +976,7 @@ namespace KizShop.Shop
 
                 var sale = _shopService?.ActiveSale;
                 decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+                decimal buySaleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.BuyMultiplier : 1.0m;
 
                 decimal curSell = sellPressure;
                 foreach (var inst in grp)
@@ -937,6 +986,15 @@ namespace KizShop.Shop
 
                     var unitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
                     decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
+                    if (!cfg.AllowSellAboveBuy && entry.BuyPrice > 0m)
+                    {
+                        var buyMoney = PriceCalculator.CalculateSingleUnitBuyPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
+                        decimal maxBuy = buyMoney.ToDecimal() * amountRatio * qualityRatio * buySaleMult;
+                        if (finalDec > maxBuy)
+                        {
+                            finalDec = maxBuy;
+                        }
+                    }
                     totalExpectedCents += (long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero);
 
                     if (dynCfg.Enabled) curSell += 1.0m;
@@ -1024,6 +1082,7 @@ namespace KizShop.Shop
 
                 var sale = _shopService?.ActiveSale;
                 decimal saleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.SellMultiplier : 1.0m;
+                decimal buySaleMult = (sale != null && sale.IsActive(_clock.UtcNow)) ? sale.BuyMultiplier : 1.0m;
 
                 decimal curSell = sellPressure;
                 foreach (var inst in grp)
@@ -1032,6 +1091,15 @@ namespace KizShop.Shop
                     decimal qualityRatio = cfg.ScaleSellByQuality ? (inst.Quality / 100m) : 1.0m;
                     var unitMoney = PriceCalculator.CalculateSingleUnitSellPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
                     decimal finalDec = unitMoney.ToDecimal() * amountRatio * qualityRatio * saleMult;
+                    if (!cfg.AllowSellAboveBuy && entry.BuyPrice > 0m)
+                    {
+                        var buyMoney = PriceCalculator.CalculateSingleUnitBuyPrice(entry.BuyPrice, entry.SellPrice.Value, dynCfg, buyPressure, curSell, cfg.AllowSellAboveBuy);
+                        decimal maxBuy = buyMoney.ToDecimal() * amountRatio * qualityRatio * buySaleMult;
+                        if (finalDec > maxBuy)
+                        {
+                            finalDec = maxBuy;
+                        }
+                    }
                     recomputedCents += (long)Math.Round(finalDec * 100m, MidpointRounding.AwayFromZero);
                     if (dynCfg.Enabled) curSell += 1.0m;
                 }
@@ -1333,9 +1401,26 @@ namespace KizShop.Shop
             }
 
             var coolKey = (steamId, kit.Name.ToLowerInvariant());
-            if (kit.CooldownSeconds > 0 && !isAdmin && _kitCooldowns.TryGetValue(coolKey, out var lastBuy))
+            DateTime? lastBuy = null;
+            if (_kitCooldowns.TryGetValue(coolKey, out var memTime))
             {
-                var elapsed = (_clock.UtcNow - lastBuy).TotalSeconds;
+                lastBuy = memTime;
+            }
+            else if (_storage != null)
+            {
+                lastBuy = await _storage.GetKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false);
+                if (lastBuy.HasValue)
+                {
+                    var utcTime = lastBuy.Value.Kind == DateTimeKind.Utc ? lastBuy.Value : lastBuy.Value.ToUniversalTime();
+                    lastBuy = utcTime;
+                    _kitCooldowns[coolKey] = utcTime;
+                }
+            }
+
+            if (kit.CooldownSeconds > 0 && !isAdmin && lastBuy.HasValue)
+            {
+                var utcTime = lastBuy.Value.Kind == DateTimeKind.Utc ? lastBuy.Value : lastBuy.Value.ToUniversalTime();
+                var elapsed = (_clock.UtcNow - utcTime).TotalSeconds;
                 if (elapsed < kit.CooldownSeconds)
                 {
                     int rem = (int)Math.Ceiling(kit.CooldownSeconds - elapsed);
@@ -1360,6 +1445,11 @@ namespace KizShop.Shop
                 return new ShopKitTransactionResult { Success = false, ErrorKey = "transaction_in_flight" };
             }
 
+            bool delivered = false;
+            bool refunded = false;
+            var deliveredItems = new List<SDG.Unturned.Item>();
+            WithdrawResult withdrawRes = null;
+
             try
             {
                 if (kit.Items != null)
@@ -1374,7 +1464,7 @@ namespace KizShop.Shop
                     }
                 }
 
-                var withdrawRes = await _economyService.TryWithdrawAsync(steamId, kitPrice, $"KitBuy:{kit.Name}").ConfigureAwait(false);
+                withdrawRes = await _economyService.TryWithdrawAsync(steamId, kitPrice, $"KitBuy:{kit.Name}").ConfigureAwait(false);
                 if (!withdrawRes.Success)
                 {
                     var curBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
@@ -1386,55 +1476,106 @@ namespace KizShop.Shop
                     };
                 }
 
-                var deliveredItems = new List<SDG.Unturned.Item>();
-                bool deliveryFailed = false;
-                string failReason = "kit_delivery_failed";
-                object[] failArgs = null;
-                bool autoEquip = cfg.AutoEquipPurchasedItems;
-
-                if (kit.Items != null)
+                try
                 {
-                    foreach (var ki in kit.Items)
+                    bool deliveryFailed = false;
+                    string failReason = "kit_delivery_failed";
+                    object[] failArgs = null;
+                    bool autoEquip = cfg.AutoEquipPurchasedItems;
+
+                    if (kit.Items != null)
                     {
-                        for (int i = 0; i < ki.Amount; i++)
+                        foreach (var ki in kit.Items)
                         {
-                            var item = await _inventoryGateway.CreateItemAsync(ki.Id).ConfigureAwait(false);
-                            if (item == null)
+                            for (int i = 0; i < ki.Amount; i++)
                             {
-                                deliveryFailed = true;
-                                failReason = "buy_item_unknown";
-                                failArgs = new object[] { ki.Id };
-                                break;
+                                var item = await _inventoryGateway.CreateItemAsync(ki.Id).ConfigureAwait(false);
+                                if (item == null)
+                                {
+                                    deliveryFailed = true;
+                                    failReason = "buy_item_unknown";
+                                    failArgs = new object[] { ki.Id };
+                                    break;
+                                }
+                                bool added = await _inventoryGateway.TryAddItemAsync(steamId, item, autoEquip).ConfigureAwait(false);
+                                if (!added)
+                                {
+                                    deliveryFailed = true;
+                                    failReason = "kit_no_space";
+                                    break;
+                                }
+                                deliveredItems.Add(item);
                             }
-                            bool added = await _inventoryGateway.TryAddItemAsync(steamId, item, autoEquip).ConfigureAwait(false);
-                            if (!added)
-                            {
-                                deliveryFailed = true;
-                                failReason = "kit_no_space";
-                                break;
-                            }
-                            deliveredItems.Add(item);
+                            if (deliveryFailed) break;
                         }
-                        if (deliveryFailed) break;
                     }
-                }
 
-                if (deliveryFailed)
-                {
-                    foreach (var d in deliveredItems)
+                    if (deliveryFailed)
                     {
-                        await _inventoryGateway.RemoveItemByReferenceAsync(steamId, d).ConfigureAwait(false);
+                        if (!refunded)
+                        {
+                            refunded = true;
+                            foreach (var d in deliveredItems)
+                            {
+                                await _inventoryGateway.RemoveItemByReferenceAsync(steamId, d).ConfigureAwait(false);
+                            }
+                            await _economyService.DepositAsync(steamId, kitPrice, $"Refund:KitBuyFail:{kit.Name}", ignoreMaxBalance: true).ConfigureAwait(false);
+                            _kitCooldowns.TryRemove(coolKey, out _);
+                            if (_storage != null)
+                            {
+                                try { await _storage.ClearKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false); } catch { }
+                            }
+                        }
+                        return new ShopKitTransactionResult { Success = false, ErrorKey = failReason, ErrorArgs = failArgs };
                     }
-                    await _economyService.DepositAsync(steamId, kitPrice, $"KitRefund:{kit.Name}", ignoreMaxBalance: true).ConfigureAwait(false);
-                    return new ShopKitTransactionResult { Success = false, ErrorKey = failReason, ErrorArgs = failArgs };
+
+                    delivered = true;
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Kit delivery exception for {steamId} ({kit.Name}): {ex}");
+                    if (!delivered && !refunded)
+                    {
+                        refunded = true;
+                        foreach (var d in deliveredItems)
+                        {
+                            try { await _inventoryGateway.RemoveItemByReferenceAsync(steamId, d).ConfigureAwait(false); } catch { }
+                        }
+                        try
+                        {
+                            await _economyService.DepositAsync(steamId, kitPrice, $"Refund:KitDeliveryException:{kit.Name}", ignoreMaxBalance: true).ConfigureAwait(false);
+                        }
+                        catch (Exception depEx)
+                        {
+                            KizLog.Error($"[KizShop] Kit refund failed for {steamId} ({kit.Name}): {depEx}");
+                        }
+                        _kitCooldowns.TryRemove(coolKey, out _);
+                        if (_storage != null)
+                        {
+                            try { await _storage.ClearKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false); } catch { }
+                        }
+                    }
+                    return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_delivery_failed" };
                 }
 
                 if (kit.CooldownSeconds > 0)
                 {
-                    _kitCooldowns[coolKey] = _clock.UtcNow;
+                    var now = _clock.UtcNow;
+                    _kitCooldowns[coolKey] = now;
+                    if (_storage != null)
+                    {
+                        try
+                        {
+                            await _storage.SetKitCooldownAsync(steamId, kit.Name.ToLowerInvariant(), now).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            KizLog.Error($"[KizShop] Failed to persist kit cooldown for {steamId} ({kit.Name}): {ex}");
+                        }
+                    }
                 }
 
-                OnKitPurchased?.Invoke(steamId, kit, kitPrice, withdrawRes.NewBalance);
+                SafeRaiseKitPurchased(steamId, kit, kitPrice, withdrawRes.NewBalance);
 
                 return new ShopKitTransactionResult
                 {

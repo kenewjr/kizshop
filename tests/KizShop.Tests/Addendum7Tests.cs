@@ -725,7 +725,7 @@ namespace KizShop.Tests
         {
             var cmd = new KizShop.Commands.CommandGiveaway();
             Assert.Equal("giveaway", cmd.Name);
-            Assert.Equal("<amount>", cmd.Syntax);
+            Assert.Equal("<amount|confirm>", cmd.Syntax);
             Assert.Contains("kizshop.admin", cmd.Permissions);
             Assert.Contains("kizshop.giveaway", cmd.Permissions);
             Assert.Equal(Rocket.API.AllowedCaller.Both, cmd.AllowedCaller);
@@ -863,7 +863,7 @@ namespace KizShop.Tests
 
             var starter = shop.ResolveKit("starter");
             Assert.NotNull(starter);
-            Assert.Equal(1000.00m, starter.BuyPrice);
+            Assert.Equal(100.00m, starter.BuyPrice);
             Assert.Contains(starter.Items, i => i.Id == 97 && i.Amount == 1);
             Assert.Contains(starter.Items, i => i.Id == 98 && i.Amount == 3);
             Assert.Contains(starter.Items, i => i.Id == 9 && i.Amount == 1);
@@ -906,17 +906,17 @@ namespace KizShop.Tests
             ulong steamId = 76561198000000123UL;
 
             // Insufficient funds
-            await eco.SetBalanceAsync(steamId, Money.FromDecimal(500m), "Initial");
+            await eco.SetBalanceAsync(steamId, Money.FromDecimal(50m), "Initial");
             var failRes = await tx.BuyKitAsync(steamId, "starter", _ => true, false);
             Assert.False(failRes.Success);
             Assert.Equal("kit_insufficient_funds", failRes.ErrorKey);
 
-            // Sufficient funds: starter kit costs $1,000
+            // Sufficient funds: starter kit costs $100
             await eco.SetBalanceAsync(steamId, Money.FromDecimal(2500m), "Topup");
             var successRes = await tx.BuyKitAsync(steamId, "starter", _ => true, false);
             Assert.True(successRes.Success);
-            Assert.Equal(Money.FromDecimal(1000m), successRes.Price);
-            Assert.Equal(Money.FromDecimal(1500m), successRes.NewBalance);
+            Assert.Equal(Money.FromDecimal(100m), successRes.Price);
+            Assert.Equal(Money.FromDecimal(2400m), successRes.NewBalance);
 
             // Check inventory received the 3 items (Colt, 3x Mag, Daypack)
             var gearColt = await inventory.GetGearItemsAsync(steamId, 97);

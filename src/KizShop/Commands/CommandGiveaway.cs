@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
 using Rocket.API;
+using Rocket.Unturned.Player;
 using SDG.Unturned;
 using KizShop.Common;
 
@@ -13,9 +15,12 @@ namespace KizShop.Commands
         public AllowedCaller AllowedCaller => AllowedCaller.Both;
         public string Name => "giveaway";
         public string Help => "Admin command to distribute money to all currently online players.";
-        public string Syntax => "<amount>";
+        public string Syntax => "<amount|confirm>";
         public List<string> Aliases => new List<string> { "giveall" };
         public List<string> Permissions => new List<string> { "kizshop.giveaway", "kizshop.admin" };
+
+        private static readonly ConcurrentDictionary<string, (Money Amount, DateTime ExpiresUtc)> _pendingGiveaways =
+            new ConcurrentDictionary<string, (Money, DateTime)>();
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
@@ -37,21 +42,89 @@ namespace KizShop.Commands
                 return;
             }
 
-            if (!decimal.TryParse(command[0], NumberStyles.Number, CultureInfo.InvariantCulture, out var amountDec) || amountDec <= 0)
+            string callerKey = caller?.Id ?? "console";
+            bool isConsole = caller is ConsolePlayer || string.Equals(callerKey, "console", StringComparison.OrdinalIgnoreCase);
+
+            Money moneyAmount;
+
+            if (string.Equals(command[0], "confirm", StringComparison.OrdinalIgnoreCase))
             {
-                plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("giveaway_invalid_amount", command[0]), UnityEngine.Color.red));
-                return;
+                if (!_pendingGiveaways.TryRemove(callerKey, out var pending))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("giveaway_no_pending"), UnityEngine.Color.red));
+                    return;
+                }
+
+                if (DateTime.UtcNow > pending.ExpiresUtc)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("giveaway_expired"), UnityEngine.Color.red));
+                    return;
+                }
+
+                moneyAmount = pending.Amount;
+            }
+            else
+            {
+                if (!decimal.TryParse(command[0], NumberStyles.Number, CultureInfo.InvariantCulture, out var amountDec) || amountDec <= 0)
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("giveaway_invalid_amount", command[0]), UnityEngine.Color.red));
+                    return;
+                }
+
+                if (cfg.GiveawayMaxPerPlayer > 0m && amountDec > cfg.GiveawayMaxPerPlayer)
+                {
+                    var formattedCap = plugin.FormatMoney(Money.FromDecimal(cfg.GiveawayMaxPerPlayer));
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("giveaway_exceeds_max", amountDec, formattedCap), UnityEngine.Color.red));
+                    return;
+                }
+
+                if (!Money.TryFromDecimal(amountDec, cfg.MaxTransactionAmount, out moneyAmount, out var moneyErr))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("invalid_money_amount", moneyErr), UnityEngine.Color.red));
+                    return;
+                }
+
+                if (!isConsole)
+                {
+                    var count = await plugin.Dispatcher.RunOnMainThreadAsync(() =>
+                    {
+                        var clients = Provider.clients;
+                        int c = 0;
+                        if (clients != null)
+                        {
+                            foreach (var cl in clients)
+                            {
+                                if (cl != null && cl.playerID != null) c++;
+                            }
+                        }
+                        return c;
+                    }).ConfigureAwait(false);
+
+                    if (count == 0)
+                    {
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            KizChat.Say(caller, plugin.Translate("giveaway_no_players"), UnityEngine.Color.yellow));
+                        return;
+                    }
+
+                    _pendingGiveaways[callerKey] = (moneyAmount, DateTime.UtcNow.AddSeconds(30));
+                    var totalExpected = Money.FromCents(moneyAmount.Cents * count);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                    {
+                        var formattedPer = plugin.FormatMoney(moneyAmount);
+                        var formattedTot = plugin.FormatMoney(totalExpected);
+                        KizChat.Say(caller, plugin.Translate("giveaway_confirm_prompt", formattedPer, count, formattedTot), UnityEngine.Color.yellow);
+                    });
+                    return;
+                }
             }
 
-            if (!Money.TryFromDecimal(amountDec, cfg.MaxTransactionAmount, out var moneyAmount, out var moneyErr))
-            {
-                plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("invalid_money_amount", moneyErr), UnityEngine.Color.red));
-                return;
-            }
-
-            // Collect currently online players only
+            // Distribute to online players
             var onlineSteamIds = await plugin.Dispatcher.RunOnMainThreadAsync(() =>
             {
                 var list = new List<ulong>();
@@ -93,6 +166,35 @@ namespace KizShop.Commands
             }
 
             await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            // Audit log & Discord webhook
+            ulong adminSteamId = 0;
+            if (caller is UnturnedPlayer up)
+            {
+                adminSteamId = up.CSteamID.m_SteamID;
+            }
+            var totalDistributed = Money.FromCents(moneyAmount.Cents * successCount);
+
+            if (plugin.Storage != null)
+            {
+                try
+                {
+                    await plugin.Storage.LogTransactionAsync(
+                        adminSteamId,
+                        "Giveaway",
+                        totalDistributed,
+                        $"Admin: {giverName} ({adminSteamId}), PerPlayer: {moneyAmount.ToDecimal()}, Recipients: {successCount}").ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Error($"[KizShop] Failed to log giveaway audit transaction: {ex}");
+                }
+            }
+
+            if (plugin.DiscordWebhook != null)
+            {
+                _ = plugin.DiscordWebhook.SendGiveawayAlertAsync(giverName, adminSteamId, moneyAmount, successCount, totalDistributed);
+            }
 
             plugin.Dispatcher.QueueOnMainThread(() =>
             {

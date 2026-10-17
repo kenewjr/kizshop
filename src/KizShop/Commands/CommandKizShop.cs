@@ -388,14 +388,38 @@ namespace KizShop.Commands
                         if (args.Count < 4 ||
                             !decimal.TryParse(args[1], NumberStyles.Number, CultureInfo.InvariantCulture, out var bMult) ||
                             !decimal.TryParse(args[2], NumberStyles.Number, CultureInfo.InvariantCulture, out var sMult) ||
-                            !int.TryParse(args[3], out var saleMins) || saleMins <= 0)
+                            !int.TryParse(args[3], out var saleMins))
                         {
                             plugin.Dispatcher.QueueOnMainThread(() =>
                                 KizChat.Say(caller, plugin.Translate("sale_usage"), UnityEngine.Color.yellow));
                             return;
                         }
 
-                        string saleName = args.Count >= 5 ? args[4] : "Happy Hour";
+                        var cfg = plugin.Configuration.Instance;
+                        if (bMult < cfg.SaleMinBuyMultiplier || bMult > 1.00m ||
+                            sMult < 1.00m || sMult > cfg.SaleMaxSellMultiplier ||
+                            saleMins < 1 || saleMins > 1440)
+                        {
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                                KizChat.Say(caller, plugin.Translate("sale_invalid_params", cfg.SaleMinBuyMultiplier, 1.00m, 1.00m, cfg.SaleMaxSellMultiplier), UnityEngine.Color.red));
+                            return;
+                        }
+
+                        string saleName = "Happy Hour";
+                        if (args.Count >= 5)
+                        {
+                            saleName = string.Join(" ", args.Skip(4)).Trim();
+                        }
+                        saleName = Regex.Replace(saleName, @"<[^>]*>", string.Empty).Trim();
+                        if (string.IsNullOrWhiteSpace(saleName))
+                        {
+                            saleName = "Happy Hour";
+                        }
+                        else if (saleName.Length > 32)
+                        {
+                            saleName = saleName.Substring(0, 32);
+                        }
+
                         plugin.Shop.StartSale(bMult, sMult, saleMins, saleName);
 
                         int discountPercent = (int)Math.Round((1.0m - bMult) * 100m);

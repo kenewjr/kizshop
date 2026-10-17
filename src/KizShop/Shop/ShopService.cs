@@ -742,6 +742,8 @@ namespace KizShop.Shop
             }
         }
 
+        public string AddKit(KitShopEntry kit) => AddOrUpdateKit(kit);
+
         public string AddOrUpdateKit(KitShopEntry kit)
         {
             if (kit == null || string.IsNullOrWhiteSpace(kit.Name)) return "Invalid kit or kit name.";
@@ -803,7 +805,7 @@ namespace KizShop.Shop
                     Name = "starter",
                     DisplayName = "Starter Kit",
                     Description = "Colt pistol, 3 magazines, and a daypack backpack.",
-                    BuyPrice = 1000.00m,
+                    BuyPrice = 100.00m,
                     Enabled = true,
                     Items = new List<KitItemEntry>
                     {

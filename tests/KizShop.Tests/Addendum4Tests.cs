@@ -321,6 +321,10 @@ namespace KizShop.Tests
             public Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc) => Task.FromResult(new DailyClaimResult { Allowed = true, Streak = 1 });
             public Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak) => Task.CompletedTask;
 
+            public Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName) => Task.FromResult<DateTime?>(null);
+            public Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc) => Task.CompletedTask;
+            public Task ClearKitCooldownAsync(ulong steamId, string kitName) => Task.CompletedTask;
+
             public void Dispose() { }
         }
 

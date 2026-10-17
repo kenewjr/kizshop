@@ -69,6 +69,9 @@
 | `/bounty list [page]` | | List top active bounties on the server | `kizshop.bounty` |
 | `/bounty me` | | Check active bounties placed on you | `kizshop.bounty` |
 | `/daily` | | Claim daily login reward with consecutive streak bonuses | `kizshop.daily` |
+| `/history [page]` | | View personal transaction history | `kizshop.history` |
+| `/kizkit [name]` | `/buykit` | Browse or purchase bundle kits (Starter, Hunter, Rifle, Sniper) | `kizshop.kit` |
+| `/giveaway <amount\|confirm>` | `/giveall` | Admin: distribute money to all online players with 30s confirmation | `kizshop.giveaway`, `kizshop.admin` |
 | `/eco <give\|take\|set> <player> <amount>` | `/economy` | Admin: adjust player balances | `kizshop.eco`, `kizshop.admin` |
 | `/kizshop [version]` | `/ks` | Admin: print build version or admin menu | `kizshop.admin` |
 | `/kizshop reload` | | Admin: reload config & shop catalog | `kizshop.admin` |
@@ -78,6 +81,8 @@
 | `/kizshop setcategory <id> <category>` | | Admin: change the category of an item | `kizshop.admin` |
 | `/kizshop resetpricing <id\|all>` | | Admin: reset dynamic pricing pressure for an item or all items | `kizshop.admin` |
 | `/kizshop import uconomy <mysql\|csv> [overwrite] [apply]` | | Admin/Console: import balances from Uconomy (dry run by default) | `kizshop.import`, `kizshop.admin` |
+| `/kizshop sale <buyMult> <sellMult> <mins> [name]` | | Admin: start global discount/bonus event | `kizshop.admin` |
+| `/kizshop export <accounts\|transactions>` | | Admin: export database records to CSV | `kizshop.admin` |
 | `/kizshop addveh <id> <name> <buy> [sell] [perm] [category]` | | Admin: add or update a vehicle entry | `kizshop.admin` |
 | `/kizshop removeveh <id>` | | Admin: remove a vehicle from shop | `kizshop.admin` |
 | `/kizshop setvehprice <id> <buy> [sell]` | | Admin: update prices for a vehicle | `kizshop.admin` |
@@ -118,10 +123,44 @@ Every item in `KizShop.shop.json` belongs to a `Category` (e.g., `Weapons`, `Med
 | `kizshop.vehicle` | Purchase and spawn vehicles (`/buyvehicle`) |
 | `kizshop.bounty` | Place, view, and check bounties (`/bounty`) |
 | `kizshop.daily` | Claim daily rewards and maintain streaks (`/daily`) |
+| `kizshop.history` | View personal transaction history (`/history`) |
+| `kizshop.kit` | Browse and purchase bundle kits (`/kizkit`, `/buykit`) |
+| `kizshop.giveaway` | Distribute money giveaway to all online players (`/giveaway`) (Admin) |
 | `kizshop.bypass.combattag` | Bypass combat tag shop restrictions while in combat |
-| `kizshop.import` | Execute Uconomy data migrations (`/kizshop import`) |
-| `kizshop.eco` | Admin balance manipulation (`/eco`) |
-| `kizshop.admin` | Admin shop catalog management and configuration (`/kizshop`) |
+| `kizshop.import` | Execute Uconomy data migrations (`/kizshop import`) (Admin) |
+| `kizshop.eco` | Admin balance manipulation (`/eco`) (Admin) |
+| `kizshop.admin` | Admin shop catalog management and configuration (`/kizshop`) (Admin) |
+
+#### Default Group Permissions (All Players)
+Add these permissions to the `default` group in `Rocket/Permissions.config.xml`:
+```xml
+<Permission Cooldown="0">kizshop.balance</Permission>
+<Permission Cooldown="0">kizshop.balance.others</Permission>
+<Permission Cooldown="0">kizshop.pay</Permission>
+<Permission Cooldown="0">kizshop.baltop</Permission>
+<Permission Cooldown="0">kizshop.shop</Permission>
+<Permission Cooldown="0">kizshop.cost</Permission>
+<Permission Cooldown="0">kizshop.buy</Permission>
+<Permission Cooldown="0">kizshop.sell</Permission>
+<Permission Cooldown="0">kizshop.vehicle</Permission>
+<Permission Cooldown="0">kizshop.bounty</Permission>
+<Permission Cooldown="0">kizshop.daily</Permission>
+<Permission Cooldown="0">kizshop.history</Permission>
+<Permission Cooldown="0">kizshop.kit</Permission>
+```
+
+#### Admin-Only Permissions (Staff / Admin Group)
+Keep these restricted to administrators:
+```xml
+<Permission Cooldown="0">kizshop.giveaway</Permission>
+<Permission Cooldown="0">kizshop.admin</Permission>
+<Permission Cooldown="0">kizshop.eco</Permission>
+<Permission Cooldown="0">kizshop.import</Permission>
+<Permission Cooldown="0">kizshop.bypass.combattag</Permission>
+```
+
+> [!NOTE]
+> Default starter kit price is **$100.00**, intentionally matching the starting player balance so new players can immediately claim their starting loadout or choose to save their funds.
 
 ### Discord Bot Commands (Gateway v10)
 

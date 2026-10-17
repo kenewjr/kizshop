@@ -156,7 +156,7 @@ namespace KizShop.Tests.Mocks
 
         public List<bool> RecordedAutoEquipFlags { get; } = new List<bool>();
 
-        public Task<bool> TryAddItemAsync(ulong steamId, Item item, bool autoEquip = false)
+        public virtual Task<bool> TryAddItemAsync(ulong steamId, Item item, bool autoEquip = false)
         {
             RecordedAutoEquipFlags.Add(autoEquip);
             if (ThrowOnDelivery) throw new InvalidOperationException("Simulated inventory crash");

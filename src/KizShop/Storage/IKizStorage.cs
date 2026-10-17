@@ -48,5 +48,10 @@ namespace KizShop.Storage
         Task<bool> CanClaimDailyAsync(ulong steamId, int currentDayIndex);
         Task<DailyClaimResult> TryClaimDailyAsync(ulong steamId, int currentDayIndex, int maxStreakDays, DateTime nowUtc);
         Task RollbackDailyClaimAsync(ulong steamId, int previousDayIndex, int previousStreak);
+
+        // Kit Cooldowns
+        Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName);
+        Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc);
+        Task ClearKitCooldownAsync(ulong steamId, string kitName);
     }
 }

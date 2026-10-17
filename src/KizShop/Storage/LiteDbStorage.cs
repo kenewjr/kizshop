@@ -95,6 +95,15 @@ namespace KizShop.Storage
             public DateTime LastClaimedUtc { get; set; }
         }
 
+        public class KitCooldownDoc
+        {
+            [BsonId]
+            public string Id { get; set; }
+            public long SteamId { get; set; }
+            public string KitName { get; set; }
+            public DateTime LastPurchaseUtc { get; set; }
+        }
+
         public LiteDbStorage(string dbPath, IClock clock = null)
         {
             _dbPath = dbPath ?? throw new ArgumentNullException(nameof(dbPath));
@@ -145,6 +154,10 @@ namespace KizShop.Storage
 
                     var dailies = _db.GetCollection<DailyClaimDoc>("daily_claims");
                     dailies.EnsureIndex(x => x.SteamId, true);
+
+                    var kitCooldowns = _db.GetCollection<KitCooldownDoc>("kit_cooldowns");
+                    kitCooldowns.EnsureIndex(x => x.SteamId);
+                    kitCooldowns.EnsureIndex(x => x.KitName);
                 }
             }).ConfigureAwait(false);
         }
@@ -943,6 +956,57 @@ namespace KizShop.Storage
                             coll.Update(doc);
                         }
                     }
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName)
+        {
+            return await Task.Run<DateTime?>(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<KitCooldownDoc>("kit_cooldowns");
+                    string id = $"{steamId}_{kitName?.ToLowerInvariant()}";
+                    var doc = coll.FindById(id);
+                    if (doc == null) return null;
+                    return doc.LastPurchaseUtc.Kind == DateTimeKind.Utc
+                        ? doc.LastPurchaseUtc
+                        : doc.LastPurchaseUtc.ToUniversalTime();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<KitCooldownDoc>("kit_cooldowns");
+                    string k = kitName?.ToLowerInvariant() ?? string.Empty;
+                    string id = $"{steamId}_{k}";
+                    var doc = new KitCooldownDoc
+                    {
+                        Id = id,
+                        SteamId = (long)steamId,
+                        KitName = k,
+                        LastPurchaseUtc = lastPurchaseUtc.Kind == DateTimeKind.Utc ? lastPurchaseUtc : lastPurchaseUtc.ToUniversalTime()
+                    };
+                    coll.Upsert(doc);
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task ClearKitCooldownAsync(ulong steamId, string kitName)
+        {
+            await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var coll = _db.GetCollection<KitCooldownDoc>("kit_cooldowns");
+                    string id = $"{steamId}_{kitName?.ToLowerInvariant()}";
+                    coll.Delete(id);
                 }
             }).ConfigureAwait(false);
         }

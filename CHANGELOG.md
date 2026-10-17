@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-10-17
+
+### Fixed & Hardened
+- **BuyKitAsync Hardening (`ShopTransactionService`)**:
+  - Wrapped item delivery in try/catch mirroring `ExecuteBuyAsync`.
+  - Added reference tracking for delivered items: on any item delivery failure or exception, removes delivered items via `RemoveItemByReferenceAsync` and refunds the kit price in full via `DepositAsync(ignoreMaxBalance: true)`. Guarantees single-refund execution.
+  - Safe subscriber invocation for `OnKitPurchased` moved after delivery and outside rollback try/catch.
+  - Delivery exceptions logged with player SteamID and kit name.
+- **Storage-Backed Kit Cooldowns**:
+  - Replaced in-memory kit cooldowns with storage records across LiteDB, SQLite, and MySQL (`steam_id`, lowercase `kit_name`, `last_purchase`).
+  - Implemented read-through in-memory cache, write-through only upon successful transaction, and automatic cleanup on rollback.
+- **Resolved Command Collision with uEssentials**:
+  - Renamed `CommandKit` to `kizkit` with alias `buykit`. Removed `kit` and `kits` aliases to eliminate collision with uEssentials kit commands.
+  - Retained `kizshop.kit` permission node and updated help and translations accordingly.
+- **Sale Validation & Arbitrage Protection**:
+  - Enforced multiplier boundaries: `0.10 <= buyMultiplier <= 1.00` and `1.00 <= sellMultiplier <= 2.00` via config settings `SaleMinBuyMultiplier` and `SaleMaxSellMultiplier` (clamped in `Normalize()`).
+  - Restricted sale duration to 1..1440 minutes with translated error `sale_invalid_params`.
+  - Enforced strict buy-price clamping when `AllowSellAboveBuy` is false across `PriceCalculator`, `ExecuteSellAsync`, `ExecuteSellHandAsync`, and `ExecuteSellAll` paths.
+  - Sanitized custom sale names: joined multi-word arguments, stripped rich text tags (`<...>`), trimmed whitespace, and capped at 32 characters.
+- **Giveaway Safeguards**:
+  - Added `GiveawayMaxPerPlayer` configuration setting (default 1000.00, clamped >= 0 in `Normalize()`), rejecting amounts above cap.
+  - Added mandatory 30-second confirmation prompt for admin callers (`/giveaway <amount>` -> `/giveaway confirm`) displaying total cost calculation (`amount * onlineCount`). Console callers may execute without confirmation.
+  - Added audit logging to transaction history and Discord webhook integration for giveaway distributions. Applied identically to `/eco giveaway`.
+- **Async Hygiene**:
+  - Replaced fire-and-forget Tasks in `KizShopPlugin` (e.g., `HandleEnemyConnected` balance pre-warming, kill rewards, zombie rewards, bounty claims) with `SafeRunAsync` logging caught exceptions.
+  - Re-implemented `MigrateTranslationsOnDisk` using `XDocument` to inspect and update only known keys containing `gold`, creating `.bak` backup once and using atomic temp-file replace.
+- **CSV Injection Prevention (`DataExportService`)**:
+  - Sanitized text cells (`Type`, `Details`) in CSV exports: prefixing cells starting with `=`, `+`, `-`, `@`, tab (`\t`), or CR (`\r`) with a single quote `'`. Quotes cells, doubles internal quotation marks, and replaces newlines with spaces.
+- **Permissions & Starter Kit Price Rebalance**:
+  - Updated documentation: added `kizshop.history` and `kizshop.kit` to default player permissions; verified `kizshop.giveaway` and `kizshop.admin` are admin-only.
+  - Reduced starter kit default price to $100.00 to match default starting balance.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added
