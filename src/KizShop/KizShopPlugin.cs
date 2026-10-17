@@ -29,7 +29,7 @@ namespace KizShop
     {
         public static KizShopPlugin Instance { get; private set; }
 
-        public IKizStorage Storage { get; private set; }
+        public IKizStorage Storage { get; internal set; }
         public EconomyService Economy { get; private set; }
         public ShopService Shop { get; private set; }
         public ShopTransactionService Transactions { get; private set; }
@@ -39,8 +39,8 @@ namespace KizShop
         public IClock Clock { get; private set; } = SystemClock.Instance;
         public IMainThreadDispatcher Dispatcher { get; private set; } = new RocketMainThreadDispatcher();
 
-        public TtlCache<int, System.Collections.Generic.List<TopBalanceEntry>> BalTopCache { get; private set; }
-        public TtlCache<string, System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>> HistoryCache { get; private set; }
+        public TtlCache<int, System.Collections.Generic.List<TopBalanceEntry>> BalTopCache { get; internal set; }
+        public TtlCache<string, System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>> HistoryCache { get; internal set; }
         public CommandRateLimiter RateLimiter { get; private set; }
         public DatabaseBackupManager BackupManager { get; private set; }
         public StorageMetrics StorageMetrics { get; private set; }
@@ -301,6 +301,7 @@ namespace KizShop
                         StorageMetrics);
 
                     BackupManager = new DatabaseBackupManager(Directory, Storage, () => Configuration.Instance, Clock);
+                    BackupManager.CleanupLeftoverTempFiles();
                 }
                 catch (Exception storageEx)
                 {
@@ -543,11 +544,23 @@ namespace KizShop
             }
         }
 
+        public static string VersionString
+        {
+            get
+            {
+                var asm = typeof(KizShopPlugin).Assembly;
+                var raw = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                          ?? asm.GetName().Version?.ToString()
+                          ?? "0.6.1";
+                int plus = raw.IndexOf('+');
+                return plus >= 0 ? raw.Substring(0, plus) : raw;
+            }
+        }
+
         public static string GetBuildIdentification(int mainThreadId)
         {
             var asm = typeof(KizShopPlugin).Assembly;
-            var infoVer = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-                          ?? asm.GetName().Version?.ToString();
+            var infoVer = VersionString;
 
             DateTime buildTime;
             try
@@ -1253,35 +1266,35 @@ namespace KizShop
 
         public async Task<System.Collections.Generic.List<TopBalanceEntry>> GetCachedBalTopAsync(int count)
         {
-            int ttl = Configuration.Instance.BalTopCacheSeconds;
+            int ttl = Configuration?.Instance?.BalTopCacheSeconds ?? 30;
             if (ttl > 0 && BalTopCache != null && BalTopCache.TryGet(count, out var cached))
             {
-                return cached;
+                return cached == null ? null : new System.Collections.Generic.List<TopBalanceEntry>(cached);
             }
 
             var list = await Storage.GetTopBalancesAsync(count).ConfigureAwait(false);
             if (ttl > 0 && BalTopCache != null && list != null)
             {
-                BalTopCache.Set(count, list, ttl);
+                BalTopCache.Set(count, new System.Collections.Generic.List<TopBalanceEntry>(list), ttl);
             }
-            return list;
+            return list == null ? null : new System.Collections.Generic.List<TopBalanceEntry>(list);
         }
 
         public async Task<System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>> GetCachedHistoryAsync(ulong steamId, int page, int pageSize, int offset)
         {
             string key = $"{steamId}:{page}";
-            int ttl = Configuration.Instance.HistoryCacheSeconds;
+            int ttl = Configuration?.Instance?.HistoryCacheSeconds ?? 15;
             if (ttl > 0 && HistoryCache != null && HistoryCache.TryGet(key, out var cached))
             {
-                return cached;
+                return cached == null ? null : new System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>(cached);
             }
 
             var records = await Storage.GetTransactionHistoryAsync(steamId, pageSize, offset).ConfigureAwait(false);
             if (ttl > 0 && HistoryCache != null && records != null)
             {
-                HistoryCache.Set(key, records, ttl);
+                HistoryCache.Set(key, new System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>(records), ttl);
             }
-            return records;
+            return records == null ? null : new System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>(records);
         }
 
         private void OnUnobservedTaskException(object sender, UnobservedTaskExceptionEventArgs e)

@@ -19,6 +19,8 @@ namespace KizShop.Storage
         private LiteDatabase _db;
         private bool _disposed;
 
+        public string DatabasePath => _dbPath;
+
         public class AccountDoc
         {
             [BsonId]
@@ -1016,16 +1018,45 @@ namespace KizShop.Storage
 
         public async Task<int> PurgeTransactionsOlderThanAsync(DateTime cutoffUtc)
         {
-            return await Task.Run(() =>
+            var utcCutoff = cutoffUtc.Kind == DateTimeKind.Utc ? cutoffUtc : cutoffUtc.ToUniversalTime();
+            int totalDeleted = 0;
+            while (true)
             {
-                lock (_dbLock)
+                int batchDeleted = 0;
+                await Task.Run(() =>
                 {
-                    var txs = _db.GetCollection<TransactionDoc>("transactions");
-                    var utcCutoff = cutoffUtc.Kind == DateTimeKind.Utc ? cutoffUtc : cutoffUtc.ToUniversalTime();
-                    int deleted = txs.DeleteMany(x => x.Timestamp < utcCutoff);
-                    return deleted;
+                    lock (_dbLock)
+                    {
+                        var txs = _db.GetCollection<TransactionDoc>("transactions");
+                        var ids = txs.Query()
+                            .Where(x => x.Timestamp < utcCutoff)
+                            .Select(x => x.Id)
+                            .Limit(1000)
+                            .ToList();
+
+                        if (ids != null && ids.Count > 0)
+                        {
+                            foreach (var id in ids)
+                            {
+                                if (txs.Delete(id))
+                                {
+                                    batchDeleted++;
+                                }
+                            }
+                        }
+                    }
+                }).ConfigureAwait(false);
+
+                totalDeleted += batchDeleted;
+                if (batchDeleted < 1000)
+                {
+                    break;
                 }
-            }).ConfigureAwait(false);
+
+                await Task.Yield();
+            }
+
+            return totalDeleted;
         }
 
         public async Task<int> GetAccountCountAsync()
@@ -1070,6 +1101,37 @@ namespace KizShop.Storage
                     return _db.GetCollection<BountyDoc>("bounties").Count(x => x.RefundPending);
                 }
             }).ConfigureAwait(false);
+        }
+
+        public void CopyDatabaseTo(string destPath)
+        {
+            if (string.IsNullOrEmpty(destPath)) throw new ArgumentNullException(nameof(destPath));
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            lock (_dbLock)
+            {
+                _db?.Checkpoint();
+
+                var dir = Path.GetDirectoryName(destPath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                if (!File.Exists(_dbPath))
+                {
+                    throw new FileNotFoundException($"Source database file not found: {Path.GetFileName(_dbPath)}", _dbPath);
+                }
+
+                using (var sourceStream = new FileStream(_dbPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var destStream = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    sourceStream.CopyTo(destStream);
+                    destStream.Flush(true);
+                }
+            }
+            sw.Stop();
+            KizLog.Info($"[KizShop] LiteDB copy completed in {sw.ElapsedMilliseconds} ms: {_dbPath} -> {destPath}");
         }
 
         public void Checkpoint()

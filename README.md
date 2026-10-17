@@ -238,6 +238,7 @@ Keep these restricted to administrators:
   <!-- Per-Player Command Rate Limiting (intervals in milliseconds) -->
   <RateLimitEnabled>true</RateLimitEnabled>
   <RateLimitBuyMs>700</RateLimitBuyMs>
+  <RateLimitKitMs>1000</RateLimitKitMs>
   <RateLimitSellAllMs>1500</RateLimitSellAllMs>
   <RateLimitHistoryMs>1500</RateLimitHistoryMs>
   <RateLimitBalTopMs>2000</RateLimitBalTopMs>

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-10-17
+
+### Hardened & Fixed
+- **1. Resolved Database Path Exposing**:
+  - `LiteDbStorage` and `SqliteStorage` now expose resolved `DatabasePath`. `DatabaseBackupManager` uses this resolved path directly without re-parsing or reconstructing from `cfg.ConnectionString`.
+- **2. Atomic Backups & Integrity Validation**:
+  - All backups write to `<finalName>.tmp` in the `backups/` directory, validate result integrity, and atomically `File.Move` to final filename on success.
+  - Integrity validation enforces file size > 0, SQLite `PRAGMA quick_check;` (with connection pooling disabled), and LiteDB read-only collection count. On any failure, `.tmp` file is deleted and error logged.
+  - `PruneOldBackups` explicitly ignores `*.tmp` files. Added `CleanupLeftoverTempFiles` invoked on plugin startup to delete stale `.tmp` files.
+- **3. Consistent LiteDB Copy Under Lock**:
+  - Implemented `LiteDbStorage.CopyDatabaseTo(destPath)` running `Checkpoint()` and file stream copy within the same `_dbLock` critical section, preventing concurrent writes during backup and logging duration in milliseconds.
+- **4. Batched LiteDB Retention Purge**:
+  - Replaced single `DeleteMany` in `PurgeTransactionsOlderThanAsync` with a loop querying up to 1,000 matching IDs per iteration, deleting them, and releasing `_dbLock` via `await Task.Yield()` between batches to prevent thread starvation.
+- **5. Cache Defensive Copying**:
+  - `GetCachedBalTopAsync` and `GetCachedHistoryAsync` store and return defensive copies of list structures, ensuring external mutation does not affect subsequent cache hits.
+- **6. Dedicated Kit Rate-Limit Bucket**:
+  - `/kizkit` and `/buykit` now use dedicated `"kit"` rate-limit bucket governed by `RateLimitKitMs` (default 1000ms, clamped 0..30000ms in `Normalize()`), isolated from the `"buy"` bucket.
+- **7. Assembly-Derived Versioning**:
+  - `/kizshop status` header reads plugin version dynamically from assembly metadata (`KizShopPlugin.VersionString`) instead of hardcoded strings.
+
 ## [0.6.0] - 2026-10-17
 
 ### Added & Optimized

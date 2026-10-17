@@ -208,17 +208,14 @@ namespace KizShop.Tests
 
             public override async Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName)
             {
-                if (PlayerLock.IsLocked(steamId))
-                {
-                    return await base.GetKitCooldownAsync(steamId, kitName).ConfigureAwait(false);
-                }
-
                 int callIndex = System.Threading.Interlocked.Increment(ref _getCooldownCallCount);
 
                 if (callIndex == 1)
                 {
                     var result = await base.GetKitCooldownAsync(steamId, kitName).ConfigureAwait(false);
                     _call1PreCheckDone.TrySetResult(true);
+                    // Ensure Task 2 completes its pre-lock check before Task 1 proceeds to acquire PlayerLock
+                    await _call2PreCheckDone.Task.ConfigureAwait(false);
                     return result;
                 }
                 else if (callIndex == 2)
@@ -227,9 +224,12 @@ namespace KizShop.Tests
                     var result = await base.GetKitCooldownAsync(steamId, kitName).ConfigureAwait(false);
                     _call2PreCheckDone.TrySetResult(true);
 
-                    // Wait until Call 1 finishes purchase and sets cooldown in storage before Call 2 proceeds to PlayerLock
+                    // Wait until Call 1 finishes purchase and releases PlayerLock
                     await _setCooldownDone.Task.ConfigureAwait(false);
-                    await Task.Delay(20).ConfigureAwait(false);
+                    while (PlayerLock.IsLocked(steamId))
+                    {
+                        await Task.Delay(5).ConfigureAwait(false);
+                    }
                     return result;
                 }
                 else

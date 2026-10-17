@@ -112,6 +112,7 @@ namespace KizShop
         public bool RateLimitEnabled { get; set; } = true;
         public int RateLimitSellAllMs { get; set; } = 1500;
         public int RateLimitBuyMs { get; set; } = 700;
+        public int RateLimitKitMs { get; set; } = 1000;
         public int RateLimitHistoryMs { get; set; } = 1500;
         public int RateLimitBalTopMs { get; set; } = 2000;
         public int RateLimitSearchMs { get; set; } = 1000;
@@ -211,6 +212,7 @@ namespace KizShop
             RateLimitEnabled = true;
             RateLimitSellAllMs = 1500;
             RateLimitBuyMs = 700;
+            RateLimitKitMs = 1000;
             RateLimitHistoryMs = 1500;
             RateLimitBalTopMs = 2000;
             RateLimitSearchMs = 1000;
@@ -338,6 +340,13 @@ namespace KizShop
                 int clamped = System.Math.Clamp(RateLimitBuyMs, 0, 30000);
                 Common.KizLog.Warning($"[KizShop] Configuration RateLimitBuyMs ({RateLimitBuyMs}) clamped to {clamped}.");
                 RateLimitBuyMs = clamped;
+            }
+
+            if (RateLimitKitMs < 0 || RateLimitKitMs > 30000)
+            {
+                int clamped = System.Math.Clamp(RateLimitKitMs, 0, 30000);
+                Common.KizLog.Warning($"[KizShop] Configuration RateLimitKitMs ({RateLimitKitMs}) clamped to {clamped}.");
+                RateLimitKitMs = clamped;
             }
 
             if (RateLimitHistoryMs < 0 || RateLimitHistoryMs > 30000)

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using LiteDB;
+using Microsoft.Data.Sqlite;
 using KizShop.Common;
 
 namespace KizShop.Storage
@@ -11,7 +13,7 @@ namespace KizShop.Storage
     public class DatabaseBackupManager
     {
         private static readonly Regex BackupFileNameRegex =
-            new Regex(@"^kizshop_(litedb|sqlite|mysql)_\d{8}_\d{6}\..+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            new Regex(@"^kizshop_(litedb|sqlite|mysql)_\d{8}_\d{6}\.(?!tmp$)[a-zA-Z0-9]+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private readonly string _backupsFolder;
         private readonly string _baseDirectory;
@@ -64,6 +66,8 @@ namespace KizShop.Storage
                     rawStorage = inst.InnerStorage;
                 }
 
+                string tmpPath = null;
+
                 try
                 {
                     if (backendType.Contains("mysql"))
@@ -77,19 +81,38 @@ namespace KizShop.Storage
                     if (backendType.Contains("sqlite"))
                     {
                         string fileName = $"kizshop_sqlite_{timestamp}.sqlite";
-                        string destPath = Path.Combine(_backupsFolder, fileName);
+                        tmpPath = Path.Combine(_backupsFolder, fileName + ".tmp");
+                        string finalPath = Path.Combine(_backupsFolder, fileName);
+
+                        if (File.Exists(tmpPath))
+                        {
+                            File.Delete(tmpPath);
+                        }
 
                         if (rawStorage is SqliteStorage sqliteStorage)
                         {
-                            await sqliteStorage.BackupAsync(destPath).ConfigureAwait(false);
+                            await sqliteStorage.BackupAsync(tmpPath).ConfigureAwait(false);
                         }
                         else
                         {
-                            // In test fakes or alternative storage, create a small placeholder if needed
-                            File.WriteAllText(destPath, "sqlite backup");
+                            throw new InvalidOperationException($"Storage is not SqliteStorage: {rawStorage?.GetType().Name}");
                         }
 
-                        long size = File.Exists(destPath) ? new FileInfo(destPath).Length : 0L;
+                        long size = File.Exists(tmpPath) ? new FileInfo(tmpPath).Length : 0L;
+                        if (size <= 0)
+                        {
+                            throw new InvalidOperationException("SQLite backup validation failed: file size is 0 bytes.");
+                        }
+
+                        ValidateSqliteBackup(tmpPath);
+
+                        if (File.Exists(finalPath))
+                        {
+                            File.Delete(finalPath);
+                        }
+                        File.Move(tmpPath, finalPath);
+                        tmpPath = null;
+
                         PruneOldBackups(cfg.BackupKeepCount);
                         _lastBackupUtc = now;
                         _lastBackupResult = $"Success ({fileName})";
@@ -100,51 +123,38 @@ namespace KizShop.Storage
                     // Default: LiteDB
                     {
                         string fileName = $"kizshop_litedb_{timestamp}.db";
-                        string destPath = Path.Combine(_backupsFolder, fileName);
+                        tmpPath = Path.Combine(_backupsFolder, fileName + ".tmp");
+                        string finalPath = Path.Combine(_backupsFolder, fileName);
+
+                        if (File.Exists(tmpPath))
+                        {
+                            File.Delete(tmpPath);
+                        }
 
                         if (rawStorage is LiteDbStorage liteDb)
                         {
-                            liteDb.Checkpoint();
+                            liteDb.CopyDatabaseTo(tmpPath);
                         }
-
-                        string sourceFile = cfg.ConnectionString;
-                        if (!Path.IsPathRooted(sourceFile))
+                        else
                         {
-                            sourceFile = Path.Combine(_baseDirectory, sourceFile);
+                            throw new InvalidOperationException($"Storage is not LiteDbStorage: {rawStorage?.GetType().Name}");
                         }
 
-                        if (!File.Exists(sourceFile))
+                        long size = File.Exists(tmpPath) ? new FileInfo(tmpPath).Length : 0L;
+                        if (size <= 0)
                         {
-                            throw new FileNotFoundException($"Source database file not found: {Path.GetFileName(sourceFile)}");
+                            throw new InvalidOperationException("LiteDB backup validation failed: file size is 0 bytes.");
                         }
 
-                        // Copy with retry and FileShare.ReadWrite
-                        bool copied = false;
-                        for (int attempt = 1; attempt <= 3; attempt++)
+                        ValidateLiteDbBackup(tmpPath);
+
+                        if (File.Exists(finalPath))
                         {
-                            try
-                            {
-                                using (var src = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                                using (var dest = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None))
-                                {
-                                    src.CopyTo(dest);
-                                }
-                                copied = true;
-                                break;
-                            }
-                            catch (IOException ioEx) when (attempt < 3)
-                            {
-                                KizLog.Warning($"[KizShop] LiteDB backup copy attempt {attempt} failed ({ioEx.Message}), retrying in 500ms...");
-                                Thread.Sleep(500);
-                            }
+                            File.Delete(finalPath);
                         }
+                        File.Move(tmpPath, finalPath);
+                        tmpPath = null;
 
-                        if (!copied)
-                        {
-                            throw new IOException("Failed to copy LiteDB database file after 3 attempts due to file locks.");
-                        }
-
-                        long size = File.Exists(destPath) ? new FileInfo(destPath).Length : 0L;
                         PruneOldBackups(cfg.BackupKeepCount);
                         _lastBackupUtc = now;
                         _lastBackupResult = $"Success ({fileName})";
@@ -154,11 +164,85 @@ namespace KizShop.Storage
                 }
                 catch (Exception ex)
                 {
+                    if (!string.IsNullOrEmpty(tmpPath))
+                    {
+                        try
+                        {
+                            if (File.Exists(tmpPath))
+                            {
+                                File.Delete(tmpPath);
+                            }
+                        }
+                        catch (Exception delEx)
+                        {
+                            KizLog.Warning($"[KizShop] Could not delete temporary backup file {tmpPath}: {delEx.Message}");
+                        }
+                    }
+
                     _lastBackupResult = $"Failed: {ex.Message}";
                     KizLog.Error($"[KizShop] Database backup failed: {ex}");
                     return (false, $"Backup failed: {ex.Message}", null, 0L);
                 }
             }).ConfigureAwait(false);
+        }
+
+        private static void ValidateSqliteBackup(string path)
+        {
+            var connStr = new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false
+            }.ToString();
+
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA quick_check;";
+                var res = cmd.ExecuteScalar()?.ToString();
+                if (!string.Equals(res, "ok", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"SQLite backup quick_check failed: {res}");
+                }
+            }
+            SqliteConnection.ClearAllPools();
+        }
+
+        private static void ValidateLiteDbBackup(string path)
+        {
+            using var vDb = new LiteDatabase(new ConnectionString { Filename = path, ReadOnly = true });
+            _ = vDb.GetCollectionNames().Count();
+        }
+
+        public int CleanupLeftoverTempFiles()
+        {
+            if (!Directory.Exists(_backupsFolder)) return 0;
+
+            try
+            {
+                var dir = new DirectoryInfo(_backupsFolder);
+                var tmpFiles = dir.GetFiles("*.tmp");
+                int cleaned = 0;
+                foreach (var file in tmpFiles)
+                {
+                    try
+                    {
+                        file.Delete();
+                        cleaned++;
+                    }
+                    catch (Exception ex)
+                    {
+                        KizLog.Warning($"[KizShop] Could not delete leftover backup temp file {file.Name}: {ex.Message}");
+                    }
+                }
+                return cleaned;
+            }
+            catch (Exception ex)
+            {
+                KizLog.Warning($"[KizShop] Failed while cleaning up leftover backup temp files: {ex.Message}");
+                return 0;
+            }
         }
 
         public int PruneOldBackups(int keepCount)
@@ -170,7 +254,7 @@ namespace KizShop.Storage
             {
                 var dir = new DirectoryInfo(_backupsFolder);
                 var matchingFiles = dir.GetFiles()
-                    .Where(f => BackupFileNameRegex.IsMatch(f.Name))
+                    .Where(f => !f.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) && BackupFileNameRegex.IsMatch(f.Name))
                     .OrderByDescending(f => f.LastWriteTimeUtc)
                     .ThenByDescending(f => f.Name)
                     .ToList();

@@ -63,7 +63,7 @@ namespace KizShop.Commands
                 }
 
                 // Rate limit kit purchases
-                if (!plugin.CheckRateLimit(caller, "buy", cfg.RateLimitBuyMs, out double remSecs))
+                if (!plugin.CheckRateLimit(caller, "kit", cfg.RateLimitKitMs, out double remSecs))
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
                         KizChat.Say(caller, plugin.Translate("rate_limited", DurationFormatter.FormatSeconds(remSecs, true)), UnityEngine.Color.red));

@@ -15,12 +15,16 @@ namespace KizShop.Storage
     public class SqliteStorage : IKizStorage
     {
         private readonly string _connectionString;
+        private readonly string _dbFilePath;
         private readonly IClock _clock;
         private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
         private bool _disposed;
 
+        public string DatabasePath => _dbFilePath;
+
         public SqliteStorage(string dbFilePath, IClock clock = null)
         {
+            _dbFilePath = dbFilePath ?? throw new ArgumentNullException(nameof(dbFilePath));
             _clock = clock ?? SystemClock.Instance;
             var dir = Path.GetDirectoryName(dbFilePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -1806,12 +1810,15 @@ namespace KizShop.Storage
                     var destBuilder = new SqliteConnectionStringBuilder
                     {
                         DataSource = destinationPath,
-                        Mode = SqliteOpenMode.ReadWriteCreate
+                        Mode = SqliteOpenMode.ReadWriteCreate,
+                        Pooling = false
                     };
-                    using var destConn = new SqliteConnection(destBuilder.ToString());
-                    await destConn.OpenAsync().ConfigureAwait(false);
-
-                    sourceConn.BackupDatabase(destConn);
+                    using (var destConn = new SqliteConnection(destBuilder.ToString()))
+                    {
+                        await destConn.OpenAsync().ConfigureAwait(false);
+                        sourceConn.BackupDatabase(destConn);
+                    }
+                    SqliteConnection.ClearAllPools();
                 }
                 finally
                 {

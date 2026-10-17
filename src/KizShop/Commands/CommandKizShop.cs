@@ -78,7 +78,7 @@ namespace KizShop.Commands
 
                             plugin.Dispatcher.QueueOnMainThread(() =>
                             {
-                                KizChat.Say(caller, $"--- KizShop Status (v0.6.0) ---", UnityEngine.Color.cyan);
+                                KizChat.Say(caller, $"--- KizShop Status (v{KizShopPlugin.VersionString}) ---", UnityEngine.Color.cyan);
                                 KizChat.Say(caller, $"Storage: {backendName} | Accounts: {accCount} | Transactions: {txCount}", UnityEngine.Color.white);
                                 KizChat.Say(caller, $"Pending: {pendingPayouts} payouts, {pendingBounties} bounty refunds", UnityEngine.Color.white);
                                 KizChat.Say(caller, $"Active Sale: {saleStr}", UnityEngine.Color.yellow);
