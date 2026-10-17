@@ -1400,32 +1400,10 @@ namespace KizShop.Shop
                 return new ShopKitTransactionResult { Success = false, ErrorKey = "combat_tagged", ErrorArgs = new object[] { combatSecs } };
             }
 
-            var coolKey = (steamId, kit.Name.ToLowerInvariant());
-            DateTime? lastBuy = null;
-            if (_kitCooldowns.TryGetValue(coolKey, out var memTime))
+            var preCooldown = await CheckKitCooldownAsync(steamId, kit, isAdmin).ConfigureAwait(false);
+            if (preCooldown != null)
             {
-                lastBuy = memTime;
-            }
-            else if (_storage != null)
-            {
-                lastBuy = await _storage.GetKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false);
-                if (lastBuy.HasValue)
-                {
-                    var utcTime = lastBuy.Value.Kind == DateTimeKind.Utc ? lastBuy.Value : lastBuy.Value.ToUniversalTime();
-                    lastBuy = utcTime;
-                    _kitCooldowns[coolKey] = utcTime;
-                }
-            }
-
-            if (kit.CooldownSeconds > 0 && !isAdmin && lastBuy.HasValue)
-            {
-                var utcTime = lastBuy.Value.Kind == DateTimeKind.Utc ? lastBuy.Value : lastBuy.Value.ToUniversalTime();
-                var elapsed = (_clock.UtcNow - utcTime).TotalSeconds;
-                if (elapsed < kit.CooldownSeconds)
-                {
-                    int rem = (int)Math.Ceiling(kit.CooldownSeconds - elapsed);
-                    return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_cooldown", ErrorArgs = new object[] { rem } };
-                }
+                return preCooldown;
             }
 
             var sale = _shopService?.ActiveSale;
@@ -1452,6 +1430,12 @@ namespace KizShop.Shop
 
             try
             {
+                var postCooldown = await CheckKitCooldownAsync(steamId, kit, isAdmin).ConfigureAwait(false);
+                if (postCooldown != null)
+                {
+                    return postCooldown;
+                }
+
                 if (kit.Items != null)
                 {
                     foreach (var ki in kit.Items)
@@ -1515,16 +1499,7 @@ namespace KizShop.Shop
                         if (!refunded)
                         {
                             refunded = true;
-                            foreach (var d in deliveredItems)
-                            {
-                                await _inventoryGateway.RemoveItemByReferenceAsync(steamId, d).ConfigureAwait(false);
-                            }
-                            await _economyService.DepositAsync(steamId, kitPrice, $"Refund:KitBuyFail:{kit.Name}", ignoreMaxBalance: true).ConfigureAwait(false);
-                            _kitCooldowns.TryRemove(coolKey, out _);
-                            if (_storage != null)
-                            {
-                                try { await _storage.ClearKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false); } catch { }
-                            }
+                            await RollbackKitPurchaseAsync(steamId, kit, kitPrice, deliveredItems, $"Refund:KitBuyFail:{kit.Name}").ConfigureAwait(false);
                         }
                         return new ShopKitTransactionResult { Success = false, ErrorKey = failReason, ErrorArgs = failArgs };
                     }
@@ -1537,29 +1512,14 @@ namespace KizShop.Shop
                     if (!delivered && !refunded)
                     {
                         refunded = true;
-                        foreach (var d in deliveredItems)
-                        {
-                            try { await _inventoryGateway.RemoveItemByReferenceAsync(steamId, d).ConfigureAwait(false); } catch { }
-                        }
-                        try
-                        {
-                            await _economyService.DepositAsync(steamId, kitPrice, $"Refund:KitDeliveryException:{kit.Name}", ignoreMaxBalance: true).ConfigureAwait(false);
-                        }
-                        catch (Exception depEx)
-                        {
-                            KizLog.Error($"[KizShop] Kit refund failed for {steamId} ({kit.Name}): {depEx}");
-                        }
-                        _kitCooldowns.TryRemove(coolKey, out _);
-                        if (_storage != null)
-                        {
-                            try { await _storage.ClearKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false); } catch { }
-                        }
+                        await RollbackKitPurchaseAsync(steamId, kit, kitPrice, deliveredItems, $"Refund:KitDeliveryException:{kit.Name}").ConfigureAwait(false);
                     }
                     return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_delivery_failed" };
                 }
 
                 if (kit.CooldownSeconds > 0)
                 {
+                    var coolKey = (steamId, kit.Name.ToLowerInvariant());
                     var now = _clock.UtcNow;
                     _kitCooldowns[coolKey] = now;
                     if (_storage != null)
@@ -1588,6 +1548,91 @@ namespace KizShop.Shop
             finally
             {
                 PlayerLock.Release(steamId);
+            }
+        }
+
+        private async Task<ShopKitTransactionResult> CheckKitCooldownAsync(ulong steamId, KitShopEntry kit, bool isAdmin)
+        {
+            if (kit == null || kit.CooldownSeconds <= 0 || isAdmin)
+            {
+                return null;
+            }
+
+            var coolKey = (steamId, kit.Name.ToLowerInvariant());
+            DateTime? lastBuy = null;
+            if (_kitCooldowns.TryGetValue(coolKey, out var memTime))
+            {
+                lastBuy = memTime;
+            }
+            else if (_storage != null)
+            {
+                lastBuy = await _storage.GetKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false);
+                if (lastBuy.HasValue)
+                {
+                    var utcTime = lastBuy.Value.Kind == DateTimeKind.Utc ? lastBuy.Value : lastBuy.Value.ToUniversalTime();
+                    lastBuy = utcTime;
+                    _kitCooldowns[coolKey] = utcTime;
+                }
+            }
+
+            if (lastBuy.HasValue)
+            {
+                var utcTime = lastBuy.Value.Kind == DateTimeKind.Utc ? lastBuy.Value : lastBuy.Value.ToUniversalTime();
+                var elapsed = (_clock.UtcNow - utcTime).TotalSeconds;
+                if (elapsed < kit.CooldownSeconds)
+                {
+                    int rem = (int)Math.Ceiling(kit.CooldownSeconds - elapsed);
+                    return new ShopKitTransactionResult
+                    {
+                        Success = false,
+                        ErrorKey = "kit_cooldown",
+                        ErrorArgs = new object[] { rem }
+                    };
+                }
+            }
+
+            return null;
+        }
+
+        private async Task RollbackKitPurchaseAsync(ulong steamId, KitShopEntry kit, Money kitPrice, List<SDG.Unturned.Item> deliveredItems, string reason)
+        {
+            var coolKey = (steamId, kit.Name.ToLowerInvariant());
+            foreach (var d in deliveredItems)
+            {
+                try
+                {
+                    await _inventoryGateway.RemoveItemByReferenceAsync(steamId, d).ConfigureAwait(false);
+                }
+                catch (Exception remEx)
+                {
+                    KizLog.Error($"[KizShop] Failed to remove delivered kit item during rollback for {steamId} ({kit.Name}): {remEx}");
+                }
+            }
+
+            try
+            {
+                var refundDep = await _economyService.DepositAsync(steamId, kitPrice, reason, ignoreMaxBalance: true).ConfigureAwait(false);
+                if (!refundDep.Success)
+                {
+                    KizLog.Error($"[KizShop] MANUAL REIMBURSEMENT REQUIRED: Refund deposit failed for steamId={steamId}, amount={kitPrice}, kit={kit.Name}");
+                }
+            }
+            catch (Exception depEx)
+            {
+                KizLog.Error($"[KizShop] MANUAL REIMBURSEMENT REQUIRED: Refund deposit exception for steamId={steamId}, amount={kitPrice}, kit={kit.Name}: {depEx}");
+            }
+
+            _kitCooldowns.TryRemove(coolKey, out _);
+            if (_storage != null)
+            {
+                try
+                {
+                    await _storage.ClearKitCooldownAsync(steamId, kit.Name.ToLowerInvariant()).ConfigureAwait(false);
+                }
+                catch (Exception clearEx)
+                {
+                    KizLog.Error($"[KizShop] Failed to clear kit cooldown from storage during rollback for {steamId} ({kit.Name}): {clearEx}");
+                }
             }
         }
     }

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-10-17
+
+### Fixed & Hardened
+- **BuyKitAsync Cooldown Race Elimination**:
+  - Added post-lock kit cooldown re-evaluation immediately following successful `PlayerLock.TryAcquire`. If still cooling down, returns the cooldown error result without debiting the player balance.
+  - Retained early pre-lock check as a fast path. Extracted duplicated cooldown checking logic into private helper `CheckKitCooldownAsync`.
+  - Added concurrency race condition test verifying exactly one concurrent purchase succeeds while the other is rejected with cooldown error and balance debited once.
+- **Rollback Logging & Observability**:
+  - Replaced silent/empty `catch { }` blocks around `RemoveItemByReferenceAsync` and `ClearKitCooldownAsync` during rollback with detailed error logging via `KizLog.Error`, including `steamId`, `kit.Name`, and the caught exception.
+  - Added error-level logging with manual reimbursement details (`steamId`, `amount`, `kit.Name`) if refund `DepositAsync` fails or throws an exception. Extracted rollback logic into `RollbackKitPurchaseAsync`.
+
 ## [0.5.1] - 2026-10-17
 
 ### Fixed & Hardened

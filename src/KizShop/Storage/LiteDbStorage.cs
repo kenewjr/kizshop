@@ -960,7 +960,7 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
-        public async Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName)
+        public virtual async Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName)
         {
             return await Task.Run<DateTime?>(() =>
             {
@@ -977,7 +977,7 @@ namespace KizShop.Storage
             }).ConfigureAwait(false);
         }
 
-        public async Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc)
+        public virtual async Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc)
         {
             await Task.Run(() =>
             {

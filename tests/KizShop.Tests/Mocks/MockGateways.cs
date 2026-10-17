@@ -175,7 +175,7 @@ namespace KizShop.Tests.Mocks
             return Task.FromResult(true);
         }
 
-        public Task<bool> RemoveItemByReferenceAsync(ulong steamId, Item item)
+        public virtual Task<bool> RemoveItemByReferenceAsync(ulong steamId, Item item)
         {
             RemovedByReferenceItems.Add(item);
             GearItems.RemoveAll(i => ReferenceEquals(i.Item, item));
