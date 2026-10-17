@@ -96,10 +96,10 @@ namespace KizShop.Commands
                         }
 
                         var depRes = await plugin.Economy.DepositAsync(targetSteamId, giveMoney, $"EcoGive by {caller.DisplayName}").ConfigureAwait(false);
-                        _ = plugin.DiscordWebhook?.SendAdminEcoAlertAsync(caller.DisplayName, "give", targetSteamId, giveMoney, depRes.NewBalance);
+                        FireAndForget.Run(() => plugin.DiscordWebhook?.SendAdminEcoAlertAsync(caller.DisplayName, "give", targetSteamId, giveMoney, depRes.NewBalance), "DiscordAdminEcoGive");
                         if (giveMoney.ToDecimal() >= plugin.Configuration.Instance.DiscordLargeTransactionThreshold)
                         {
-                            _ = plugin.DiscordWebhook?.SendLargeTransactionAlertAsync(targetSteamId, "AdminEco:give", giveMoney, $"Admin: {caller.DisplayName}");
+                            FireAndForget.Run(() => plugin.DiscordWebhook?.SendLargeTransactionAlertAsync(targetSteamId, "AdminEco:give", giveMoney, $"Admin: {caller.DisplayName}"), "DiscordAdminEcoGiveLarge");
                         }
                         plugin.Dispatcher.QueueOnMainThread(() =>
                         {
@@ -119,10 +119,10 @@ namespace KizShop.Commands
                         var withRes = await plugin.Economy.TryWithdrawAsync(targetSteamId, takeMoney, $"EcoTake by {caller.DisplayName}").ConfigureAwait(false);
                         if (withRes.Success)
                         {
-                            _ = plugin.DiscordWebhook?.SendAdminEcoAlertAsync(caller.DisplayName, "take", targetSteamId, takeMoney, withRes.NewBalance);
+                            FireAndForget.Run(() => plugin.DiscordWebhook?.SendAdminEcoAlertAsync(caller.DisplayName, "take", targetSteamId, takeMoney, withRes.NewBalance), "DiscordAdminEcoTake");
                             if (takeMoney.ToDecimal() >= plugin.Configuration.Instance.DiscordLargeTransactionThreshold)
                             {
-                                _ = plugin.DiscordWebhook?.SendLargeTransactionAlertAsync(targetSteamId, "AdminEco:take", takeMoney, $"Admin: {caller.DisplayName}");
+                                FireAndForget.Run(() => plugin.DiscordWebhook?.SendLargeTransactionAlertAsync(targetSteamId, "AdminEco:take", takeMoney, $"Admin: {caller.DisplayName}"), "DiscordAdminEcoTakeLarge");
                             }
                         }
                         plugin.Dispatcher.QueueOnMainThread(() =>
@@ -149,10 +149,10 @@ namespace KizShop.Commands
                         }
 
                         await plugin.Economy.SetBalanceAsync(targetSteamId, setMoney, $"EcoSet by {caller.DisplayName}").ConfigureAwait(false);
-                        _ = plugin.DiscordWebhook?.SendAdminEcoAlertAsync(caller.DisplayName, "set", targetSteamId, setMoney, setMoney);
+                        FireAndForget.Run(() => plugin.DiscordWebhook?.SendAdminEcoAlertAsync(caller.DisplayName, "set", targetSteamId, setMoney, setMoney), "DiscordAdminEcoSet");
                         if (setMoney.ToDecimal() >= plugin.Configuration.Instance.DiscordLargeTransactionThreshold)
                         {
-                            _ = plugin.DiscordWebhook?.SendLargeTransactionAlertAsync(targetSteamId, "AdminEco:set", setMoney, $"Admin: {caller.DisplayName}");
+                            FireAndForget.Run(() => plugin.DiscordWebhook?.SendLargeTransactionAlertAsync(targetSteamId, "AdminEco:set", setMoney, $"Admin: {caller.DisplayName}"), "DiscordAdminEcoSetLarge");
                         }
                         plugin.Dispatcher.QueueOnMainThread(() =>
                         {

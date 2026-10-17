@@ -208,6 +208,11 @@ namespace KizShop.Tests
 
             public override async Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName)
             {
+                if (PlayerLock.IsLocked(steamId))
+                {
+                    return await base.GetKitCooldownAsync(steamId, kitName).ConfigureAwait(false);
+                }
+
                 int callIndex = System.Threading.Interlocked.Increment(ref _getCooldownCallCount);
 
                 if (callIndex == 1)

@@ -325,6 +325,12 @@ namespace KizShop.Tests
             public Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc) => Task.CompletedTask;
             public Task ClearKitCooldownAsync(ulong steamId, string kitName) => Task.CompletedTask;
 
+            public Task<int> PurgeTransactionsOlderThanAsync(DateTime cutoffUtc) => Task.FromResult(0);
+            public Task<int> GetAccountCountAsync() => Task.FromResult(0);
+            public Task<int> GetTransactionCountAsync() => Task.FromResult(0);
+            public Task<int> GetPendingPayoutCountAsync() => Task.FromResult(0);
+            public Task<int> GetPendingBountyRefundCountAsync() => Task.FromResult(0);
+
             public void Dispose() { }
         }
 

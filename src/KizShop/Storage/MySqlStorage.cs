@@ -51,7 +51,7 @@ namespace KizShop.Storage
                         type VARCHAR(32) NOT NULL,
                         amount BIGINT NOT NULL,
                         details VARCHAR(255),
-                        INDEX idx_tx_steam (steam_id),
+                        INDEX idx_tx_steam_time (steam_id, timestamp DESC),
                         INDEX idx_tx_time (timestamp)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -116,12 +116,46 @@ namespace KizShop.Storage
 
                 // Migrations for existing upgraded databases
                 await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_bounties ADD COLUMN refund_pending TINYINT(1) NOT NULL DEFAULT 0;").ConfigureAwait(false);
-                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_transactions ADD INDEX idx_tx_steam (steam_id);").ConfigureAwait(false);
-                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_transactions ADD INDEX idx_tx_time (timestamp);").ConfigureAwait(false);
-                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_bounties ADD INDEX idx_bounty_pending (refund_pending);").ConfigureAwait(false);
                 await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_reward_payouts ADD UNIQUE KEY uq_event_player (event_key, steam_id);").ConfigureAwait(false);
-                await TryExecuteMigrationAsync(conn, "ALTER TABLE kiz_accounts ADD INDEX idx_balance (balance);").ConfigureAwait(false);
+
+                // Ensure indexes exist via information_schema
+                await EnsureIndexExistsAsync(conn, "kiz_transactions", "idx_tx_steam_time", "steam_id, timestamp DESC").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_transactions", "idx_tx_time", "timestamp").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_accounts", "idx_balance", "balance DESC").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_bounties", "idx_target", "target_steam_id").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_bounties", "idx_placer", "placer_steam_id").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_bounties", "idx_created", "created_utc").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_bounties", "idx_bounty_pending", "refund_pending").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_reward_payouts", "idx_payout_key", "event_key").ConfigureAwait(false);
+                await EnsureIndexExistsAsync(conn, "kiz_reward_payouts", "idx_payout_status", "status").ConfigureAwait(false);
             }).ConfigureAwait(false);
+        }
+
+        private static async Task EnsureIndexExistsAsync(MySqlConnection conn, string tableName, string indexName, string columnDefinition)
+        {
+            try
+            {
+                using var checkCmd = conn.CreateCommand();
+                checkCmd.CommandText = @"
+                    SELECT 1 FROM information_schema.statistics 
+                    WHERE table_schema = DATABASE() 
+                      AND table_name = @table 
+                      AND index_name = @index 
+                    LIMIT 1;";
+                checkCmd.Parameters.AddWithValue("@table", tableName);
+                checkCmd.Parameters.AddWithValue("@index", indexName);
+                var exists = await checkCmd.ExecuteScalarAsync().ConfigureAwait(false);
+                if (exists == null)
+                {
+                    using var createCmd = conn.CreateCommand();
+                    createCmd.CommandText = $"CREATE INDEX `{indexName}` ON `{tableName}` ({columnDefinition});";
+                    await createCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                KizLog.Warning($"[KizShop] Could not ensure index {indexName} on {tableName}: {ex.Message}");
+            }
         }
 
         private static async Task TryExecuteMigrationAsync(MySqlConnection conn, string sql)
@@ -132,9 +166,9 @@ namespace KizShop.Storage
                 cmd.CommandText = sql;
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore if column, index, or constraint already exists
+                KizLog.Warning($"[KizShop] MySQL migration notice ({sql}): {ex.Message}");
             }
         }
 
@@ -564,7 +598,7 @@ namespace KizShop.Storage
                     SELECT timestamp, steam_id, type, amount, details
                     FROM kiz_transactions
                     WHERE steam_id = @id
-                    ORDER BY id DESC
+                    ORDER BY timestamp DESC
                     LIMIT @limit OFFSET @offset;
                 ";
                 cmd.Parameters.AddWithValue("@id", steamId);
@@ -1324,6 +1358,84 @@ namespace KizShop.Storage
                 cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
 
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> PurgeTransactionsOlderThanAsync(DateTime cutoffUtc)
+        {
+            var cutoff = cutoffUtc.Kind == DateTimeKind.Utc ? cutoffUtc : cutoffUtc.ToUniversalTime();
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                int totalDeleted = 0;
+                while (true)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "DELETE FROM kiz_transactions WHERE timestamp < @cutoff LIMIT 1000;";
+                    cmd.Parameters.AddWithValue("@cutoff", cutoff);
+                    int count = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    totalDeleted += count;
+                    if (count == 0) break;
+                }
+                return totalDeleted;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetAccountCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM kiz_accounts;";
+                var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                return Convert.ToInt32(result);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetTransactionCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM kiz_transactions;";
+                var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                return Convert.ToInt32(result);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetPendingPayoutCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM kiz_reward_payouts WHERE status != 'Paid';";
+                var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                return Convert.ToInt32(result);
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetPendingBountyRefundCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                using var conn = new MySqlConnection(_connectionString);
+                await conn.OpenAsync().ConfigureAwait(false);
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM kiz_bounties WHERE refund_pending != 0;";
+                var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                return Convert.ToInt32(result);
             }).ConfigureAwait(false);
         }
 

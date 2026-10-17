@@ -20,6 +20,7 @@ namespace KizShop.Shop
         private readonly Dictionary<ushort, VehicleShopEntry> _vehiclesById = new Dictionary<ushort, VehicleShopEntry>();
         private readonly Dictionary<Guid, VehicleShopEntry> _vehiclesByGuid = new Dictionary<Guid, VehicleShopEntry>();
         private readonly Dictionary<string, KitShopEntry> _kitsByName = new Dictionary<string, KitShopEntry>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<NormalizedCatalogEntry> _searchIndex = new List<NormalizedCatalogEntry>();
         private List<string> _cachedCategories = new List<string>();
         private Dictionary<string, int> _cachedCategoryCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private SaleEvent _activeSale;
@@ -129,6 +130,59 @@ namespace KizShop.Shop
                     }
                 }
             }
+
+            _searchIndex.Clear();
+            if (_data.Items != null)
+            {
+                foreach (var item in _data.Items.Where(i => i.Enabled && i.Available))
+                {
+                    _searchIndex.Add(new NormalizedCatalogEntry
+                    {
+                        Kind = "Item",
+                        Id = item.Id,
+                        Name = item.Name,
+                        NormalizedName = NormalizeSearchText(item.Name),
+                        BuyPrice = item.BuyPrice,
+                        SellPrice = item.SellPrice ?? 0m,
+                        Enabled = true
+                    });
+                }
+            }
+
+            if (_data.Vehicles != null)
+            {
+                foreach (var veh in _data.Vehicles.Where(v => v.Enabled))
+                {
+                    _searchIndex.Add(new NormalizedCatalogEntry
+                    {
+                        Kind = "Vehicle",
+                        Id = veh.Id,
+                        Name = veh.Name,
+                        NormalizedName = NormalizeSearchText(veh.Name),
+                        BuyPrice = veh.BuyPrice,
+                        SellPrice = veh.SellPrice ?? 0m,
+                        Enabled = true
+                    });
+                }
+            }
+
+            if (_data.Kits != null)
+            {
+                foreach (var kit in _data.Kits.Where(k => k.Enabled))
+                {
+                    string kitDisplayName = !string.IsNullOrEmpty(kit.DisplayName) ? kit.DisplayName : kit.Name;
+                    _searchIndex.Add(new NormalizedCatalogEntry
+                    {
+                        Kind = "Kit",
+                        Id = 0,
+                        Name = kitDisplayName,
+                        NormalizedName = NormalizeSearchText(kit.Name + " " + kitDisplayName),
+                        BuyPrice = kit.BuyPrice,
+                        SellPrice = 0m,
+                        Enabled = true
+                    });
+                }
+            }
         }
 
         public bool Load()
@@ -179,7 +233,11 @@ namespace KizShop.Shop
                     {
                         File.Copy(_catalogPath, brokenPath, true);
                     }
-                    catch { }
+                    catch (Exception copyEx)
+                    {
+                        // ponytail: best-effort backup of corrupt catalog file
+                        KizLog.Warning($"[KizShop] Could not copy corrupt catalog to {brokenPath}: {copyEx.Message}");
+                    }
 
                     if (ex is JsonReaderException jex)
                     {
@@ -470,11 +528,13 @@ namespace KizShop.Shop
             lock (_lock)
             {
                 text = text?.Trim() ?? string.Empty;
+                string queryNorm = NormalizeSearchText(text);
                 bool isId = ushort.TryParse(text, out ushort searchId);
 
                 var matches = _data.Items
                     .Where(i => i.Enabled && i.Available &&
                                 ((isId && i.Id == searchId) ||
+                                 (!string.IsNullOrEmpty(queryNorm) && NormalizeSearchText(i.Name).Contains(queryNorm)) ||
                                  (!string.IsNullOrEmpty(i.Name) && i.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)))
                     .ToList();
 
@@ -486,6 +546,271 @@ namespace KizShop.Shop
 
                 var paged = matches.Skip((page - 1) * pageSize).Take(pageSize).ToList();
                 return (paged, totalPages, totalItems);
+            }
+        }
+
+        public (List<CatalogSearchResult> entries, int totalPages, int totalItems) SearchCatalog(string text, int page, int pageSize)
+        {
+            lock (_lock)
+            {
+                text = text?.Trim() ?? string.Empty;
+                string queryNorm = NormalizeSearchText(text);
+                bool isId = ushort.TryParse(text, out ushort searchId);
+
+                var matches = new List<CatalogSearchResult>();
+                foreach (var e in _searchIndex)
+                {
+                    bool match = (isId && e.Id == searchId) ||
+                                 (!string.IsNullOrEmpty(queryNorm) && e.NormalizedName.Contains(queryNorm)) ||
+                                 (!string.IsNullOrEmpty(e.Name) && e.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    if (match)
+                    {
+                        matches.Add(new CatalogSearchResult
+                        {
+                            Kind = e.Kind,
+                            Id = e.Id,
+                            Name = e.Name,
+                            BuyPrice = e.BuyPrice,
+                            SellPrice = e.SellPrice
+                        });
+                    }
+                }
+
+                int totalItems = matches.Count;
+                int totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+                if (totalPages < 1) totalPages = 1;
+                if (page < 1) page = 1;
+                if (page > totalPages) page = totalPages;
+
+                var paged = matches.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+                return (paged, totalPages, totalItems);
+            }
+        }
+
+        public List<string> GetSuggestions(string query, string kind = null, int max = 3)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return new List<string>();
+
+            lock (_lock)
+            {
+                string normQuery = NormalizeSearchText(query);
+                var candidates = new List<(string Name, int Priority, int Distance)>();
+
+                var pool = _searchIndex;
+                if (!string.IsNullOrEmpty(kind))
+                {
+                    pool = pool.Where(e => string.Equals(e.Kind, kind, StringComparison.OrdinalIgnoreCase)).ToList();
+                }
+
+                foreach (var entry in pool)
+                {
+                    string target = entry.Name;
+                    string normTarget = entry.NormalizedName;
+                    if (string.IsNullOrEmpty(target)) continue;
+
+                    if (normTarget.StartsWith(normQuery, StringComparison.OrdinalIgnoreCase))
+                    {
+                        candidates.Add((target, 1, 0));
+                    }
+                    else if (normTarget.Contains(normQuery))
+                    {
+                        candidates.Add((target, 2, 1));
+                    }
+                    else
+                    {
+                        int dist = MinLevenshteinDistance(normQuery, normTarget);
+                        if (dist <= 2)
+                        {
+                            candidates.Add((target, 3, dist));
+                        }
+                    }
+                }
+
+                return candidates
+                    .OrderBy(c => c.Priority)
+                    .ThenBy(c => c.Distance)
+                    .ThenBy(c => Math.Abs(c.Name.Length - query.Length))
+                    .Select(c => c.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(max)
+                    .ToList();
+            }
+        }
+
+        public static string NormalizeSearchText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+            string normalized = text.Normalize(System.Text.NormalizationForm.FormD);
+            var sb = new System.Text.StringBuilder(normalized.Length);
+            foreach (char c in normalized)
+            {
+                var uc = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
+                if (uc != System.Globalization.UnicodeCategory.NonSpacingMark && !char.IsPunctuation(c))
+                {
+                    sb.Append(char.ToLowerInvariant(c));
+                }
+            }
+            return System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+        }
+
+        private static int MinLevenshteinDistance(string query, string target)
+        {
+            if (string.IsNullOrEmpty(query) || string.IsNullOrEmpty(target)) return int.MaxValue;
+            int best = ComputeLevenshtein(query, target);
+            if (best <= 2) return best;
+
+            var words = target.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length > 1)
+            {
+                foreach (var w in words)
+                {
+                    if (w.Length >= 3)
+                    {
+                        int d = ComputeLevenshtein(query, w);
+                        if (d < best) best = d;
+                    }
+                }
+            }
+            return best;
+        }
+
+        private static int ComputeLevenshtein(string s, string t)
+        {
+            if (string.IsNullOrEmpty(s)) return t?.Length ?? 0;
+            if (string.IsNullOrEmpty(t)) return s.Length;
+
+            int n = s.Length;
+            int m = t.Length;
+            if (Math.Abs(n - m) > 2) return int.MaxValue;
+
+            int[] v0 = new int[m + 1];
+            int[] v1 = new int[m + 1];
+
+            for (int i = 0; i <= m; i++) v0[i] = i;
+
+            for (int i = 0; i < n; i++)
+            {
+                v1[0] = i + 1;
+                for (int j = 0; j < m; j++)
+                {
+                    int cost = char.ToLowerInvariant(s[i]) == char.ToLowerInvariant(t[j]) ? 0 : 1;
+                    v1[j + 1] = Math.Min(Math.Min(v1[j] + 1, v0[j + 1] + 1), v0[j] + cost);
+                }
+                for (int j = 0; j <= m; j++) v0[j] = v1[j];
+            }
+
+            return v1[m];
+        }
+
+        public decimal GetEffectiveKitPrice(KitShopEntry kit, IEnumerable<string> playerGroups = null)
+        {
+            if (kit == null) return 0m;
+
+            decimal discountMultiplier = 1.0m;
+            if (kit.GroupDiscounts != null && kit.GroupDiscounts.Count > 0 && playerGroups != null)
+            {
+                foreach (var g in playerGroups)
+                {
+                    if (!string.IsNullOrEmpty(g) && kit.GroupDiscounts.TryGetValue(g, out var mult))
+                    {
+                        if (mult > 0 && mult < discountMultiplier)
+                        {
+                            discountMultiplier = mult;
+                        }
+                    }
+                }
+            }
+
+            decimal discounted = Math.Round(kit.BuyPrice * discountMultiplier, 2, MidpointRounding.AwayFromZero);
+            var sale = ActiveSale;
+            if (sale != null && sale.IsActive(DateTime.UtcNow) && sale.BuyMultiplier != 1.0m)
+            {
+                discounted = Math.Round(discounted * sale.BuyMultiplier, 2, MidpointRounding.AwayFromZero);
+            }
+
+            return discounted;
+        }
+
+        public bool SetKitPermission(string kitName, string permission) => SetKitPermission(kitName, permission, out _);
+
+        public bool SetKitPermission(string kitName, string permission, out string error)
+        {
+            lock (_lock)
+            {
+                var kit = ResolveKit(kitName, enabledOnly: false);
+                if (kit == null)
+                {
+                    error = "kit_not_found";
+                    return false;
+                }
+
+                if (string.Equals(permission, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    kit.RequiredPermission = string.Empty;
+                    kit.Permission = string.Empty;
+                }
+                else
+                {
+                    kit.RequiredPermission = permission;
+                    kit.Permission = permission;
+                }
+
+                Save();
+                RebuildLookupIndexes();
+                error = null;
+                return true;
+            }
+        }
+
+        public bool SetKitDiscount(string kitName, string groupName, decimal? multiplier)
+        {
+            string mStr = multiplier.HasValue ? multiplier.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none";
+            return SetKitDiscount(kitName, groupName, mStr, out _);
+        }
+
+        public bool SetKitDiscount(string kitName, string groupName, string multiplierStr, out string error)
+        {
+            lock (_lock)
+            {
+                var kit = ResolveKit(kitName, enabledOnly: false);
+                if (kit == null)
+                {
+                    error = "kit_not_found";
+                    return false;
+                }
+
+                if (string.Equals(multiplierStr, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    kit.GroupDiscounts?.Remove(groupName);
+                    Save();
+                    RebuildLookupIndexes();
+                    error = null;
+                    return true;
+                }
+
+                if (!decimal.TryParse(multiplierStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var mult))
+                {
+                    error = "invalid_multiplier";
+                    return false;
+                }
+
+                if (mult < 0.10m || mult > 1.00m)
+                {
+                    error = "kit_discount_out_of_range";
+                    return false;
+                }
+
+                if (kit.GroupDiscounts == null)
+                {
+                    kit.GroupDiscounts = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                kit.GroupDiscounts[groupName] = mult;
+                Save();
+                RebuildLookupIndexes();
+                error = null;
+                return true;
             }
         }
 
@@ -573,6 +898,7 @@ namespace KizShop.Shop
                     _data.Items.Add(entry);
                 }
                 Save();
+                RebuildLookupIndexes();
                 return null;
             }
         }
@@ -585,6 +911,7 @@ namespace KizShop.Shop
                 if (removed > 0)
                 {
                     Save();
+                    RebuildLookupIndexes();
                     return true;
                 }
                 return false;
@@ -618,6 +945,7 @@ namespace KizShop.Shop
                 entry.BuyPrice = buyPrice;
                 entry.SellPrice = sellPrice;
                 Save();
+                RebuildLookupIndexes();
                 return null;
             }
         }
@@ -668,6 +996,7 @@ namespace KizShop.Shop
                     _data.Vehicles.Add(entry);
                 }
                 Save();
+                RebuildLookupIndexes();
                 return null;
             }
         }
@@ -680,6 +1009,7 @@ namespace KizShop.Shop
                 if (removed > 0)
                 {
                     Save();
+                    RebuildLookupIndexes();
                     return true;
                 }
                 return false;
@@ -713,6 +1043,7 @@ namespace KizShop.Shop
                 entry.BuyPrice = buyPrice;
                 entry.SellPrice = sellPrice;
                 Save();
+                RebuildLookupIndexes();
                 return null;
             }
         }
@@ -764,6 +1095,11 @@ namespace KizShop.Shop
                     existing.BuyPrice = kit.BuyPrice;
                     existing.Enabled = kit.Enabled;
                     existing.Permission = kit.Permission;
+                    existing.RequiredPermission = kit.RequiredPermission;
+                    if (kit.GroupDiscounts != null)
+                    {
+                        existing.GroupDiscounts = kit.GroupDiscounts;
+                    }
                     existing.CooldownSeconds = kit.CooldownSeconds;
                     if (kit.Items != null && kit.Items.Count > 0)
                     {
@@ -775,6 +1111,7 @@ namespace KizShop.Shop
                     _data.Kits.Add(kit);
                 }
                 Save();
+                RebuildLookupIndexes();
                 return null;
             }
         }
@@ -790,6 +1127,7 @@ namespace KizShop.Shop
                 if (removed > 0)
                 {
                     Save();
+                    RebuildLookupIndexes();
                     return true;
                 }
                 return false;

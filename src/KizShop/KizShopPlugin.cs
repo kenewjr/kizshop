@@ -39,9 +39,20 @@ namespace KizShop
         public IClock Clock { get; private set; } = SystemClock.Instance;
         public IMainThreadDispatcher Dispatcher { get; private set; } = new RocketMainThreadDispatcher();
 
+        public TtlCache<int, System.Collections.Generic.List<TopBalanceEntry>> BalTopCache { get; private set; }
+        public TtlCache<string, System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>> HistoryCache { get; private set; }
+        public CommandRateLimiter RateLimiter { get; private set; }
+        public DatabaseBackupManager BackupManager { get; private set; }
+        public StorageMetrics StorageMetrics { get; private set; }
+        public string StorageBackendName { get; private set; }
+        public string LastBackupStatus { get; private set; }
+        public string LastPurgeStatus { get; private set; }
+
         private CancellationTokenSource _playtimeCts;
         private CancellationTokenSource _logPruneCts;
         private CancellationTokenSource _bountySweepCts;
+        private CancellationTokenSource _backupLoopCts;
+        private CancellationTokenSource _retentionPurgeCts;
 
         private readonly ConcurrentDictionary<(ulong killer, ulong victim), DateTime> _killCooldowns =
             new ConcurrentDictionary<(ulong killer, ulong victim), DateTime>();
@@ -56,6 +67,8 @@ namespace KizShop
             { "invalid_catalog_entry", "<color=red>Catalog validation error: {0}</color>" },
             { "ambiguous_match", "<color=yellow>Multiple matches found: {0}. Please be more specific.</color>" },
             { "transaction_in_flight", "<color=yellow>Your previous transaction is still processing. Please wait.</color>" },
+            { "rate_limited", "<color=red>You are sending commands too quickly. Please wait {0}.</color>" },
+            { "did_you_mean", "<color=yellow>Did you mean: {0}?</color>" },
 
             { "balance_self", "Your balance is <color=green>{0}</color>." },
             { "balance_other", "<color=yellow>{0}</color>'s balance is <color=green>{1}</color>." },
@@ -66,7 +79,7 @@ namespace KizShop
             { "pay_usage", "Usage: /pay <player|steamid> <amount>" },
             { "pay_invalid_amount", "<color=red>Amount must be greater than zero.</color>" },
             { "pay_self", "<color=red>You cannot pay yourself.</color>" },
-            { "pay_insufficient_funds", "<color=red>You do not have enough funds to pay {0}.</color>" },
+            { "pay_insufficient_funds", "<color=red>You need {1} more to send {0} (balance {2}).</color>" },
             { "pay_receiver_max_balance", "<color=red>Payment failed: {0} would exceed maximum balance.</color>" },
             { "pay_sent", "You sent <color=green>{0}</color> to <color=yellow>{1}</color>. Remaining balance: <color=green>{2}</color>." },
             { "pay_received", "You received <color=green>{0}</color> from <color=yellow>{1}</color>. New balance: <color=green>{2}</color>." },
@@ -85,8 +98,9 @@ namespace KizShop
             { "buy_item_disabled", "<color=red>This item is currently not available for purchase.</color>" },
             { "buy_no_permission", "<color=red>You do not have permission to buy this item.</color>" },
             { "buy_max_amount", "<color=red>You cannot purchase more than {0} at a time.</color>" },
-            { "buy_insufficient_funds", "<color=red>You need {0} to buy {1}x {2}, but only have {3}.</color>" },
+            { "buy_insufficient_funds", "<color=red>You need {4} more to buy {1}x {2} (price {0}, balance {3}).</color>" },
             { "buy_no_space", "<color=red>Not enough inventory space to receive {0}x {1}.</color>" },
+            { "buy_no_space_details", "<color=red>Not enough inventory space to receive {0}x {1} (lacking space in {2}).</color>" },
             { "buy_player_unavailable", "<color=red>Player unavailable.</color>" },
             { "buy_item_unknown", "<color=red>Item asset ID {0} does not exist on server.</color>" },
             { "buy_success", "<color=green>Bought {0}x {1} for {2}. Remaining balance: {3}.</color>" },
@@ -116,8 +130,8 @@ namespace KizShop
             { "vehicle_not_found", "<color=red>Vehicle '{0}' not found in shop.</color>" },
             { "vehicle_disabled", "<color=red>This vehicle cannot be purchased.</color>" },
             { "vehicle_no_permission", "<color=red>You do not have permission to purchase this vehicle.</color>" },
-            { "vehicle_insufficient_funds", "<color=red>You need {0} to purchase {1}, but have {2}.</color>" },
-            { "vehicle_cooldown", "<color=red>You must wait {0}s before purchasing another vehicle.</color>" },
+            { "vehicle_insufficient_funds", "<color=red>You need {3} more to purchase {1} (price {0}, balance {2}).</color>" },
+            { "vehicle_cooldown", "<color=red>You must wait {0} before purchasing another vehicle.</color>" },
             { "vehicle_max_limit", "<color=red>You already own the maximum allowed number of vehicles ({0}).</color>" },
             { "vehicle_spawn_failed", "<color=red>Vehicle failed to spawn ({0}). Funds were refunded.</color>" },
             { "vehicle_success", "<color=green>Successfully purchased and spawned {0} for {1}!</color>" },
@@ -129,8 +143,8 @@ namespace KizShop
             { "kit_not_found", "<color=red>Kit '{0}' not found in shop.</color>" },
             { "kit_disabled", "<color=red>This kit is currently disabled.</color>" },
             { "kit_no_permission", "<color=red>You do not have permission to purchase this kit.</color>" },
-            { "kit_cooldown", "<color=red>You must wait {0}s before purchasing this kit again.</color>" },
-            { "kit_insufficient_funds", "<color=red>You need {0} to purchase {1}, but have {2}.</color>" },
+            { "kit_cooldown", "<color=red>You must wait {0} before purchasing this kit again.</color>" },
+            { "kit_insufficient_funds", "<color=red>You need {3} more to purchase {1} (price {0}, balance {2}).</color>" },
             { "kit_no_space", "<color=red>You do not have enough inventory space to receive this kit.</color>" },
             { "kit_delivery_failed", "<color=red>Failed to deliver kit items into your inventory. Payment was refunded.</color>" },
             { "kit_success", "<color=green>Successfully purchased {0} for {1}! New balance: {2}.</color>" },
@@ -141,7 +155,14 @@ namespace KizShop
             { "reward_mega_zombie_kill", "<color=yellow>+ {0} for MEGA zombie kill!</color>" },
             { "reward_playtime", "<color=green>+ {0} playtime income reward!</color>" },
 
-            { "kizshop_admin_usage", "Usage: /kizshop <version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway|sale|export>" },
+            { "kizshop_admin_usage", "Usage: /kizshop <version|reload|status|backup|kitperm|kitdiscount|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway|sale|export>" },
+            { "kizshop_kitperm_usage", "Usage: /kizshop kitperm <kit> <permission|none>" },
+            { "kizshop_kitperm_success", "<color=green>Kit '{0}' permission set to '{1}'.</color>" },
+            { "kizshop_kitdiscount_usage", "Usage: /kizshop kitdiscount <kit> <group> <multiplier|none>" },
+            { "kizshop_kitdiscount_invalid", "<color=red>Invalid discount multiplier. Must be between 0.10 and 1.00 or 'none'.</color>" },
+            { "kizshop_kitdiscount_success", "<color=green>Kit '{0}' discount for group '{1}' set to {2}.</color>" },
+            { "kizshop_backup_success", "<color=green>Database backup created successfully: {0} ({1}).</color>" },
+            { "kizshop_backup_failed", "<color=red>Database backup failed: {0}</color>" },
             { "kizshop_additem_usage", "Usage: /kizshop additem <id> \"<name>\" <buyPrice> [sellPrice] [permission]" },
             { "kizshop_removeitem_usage", "Usage: /kizshop removeitem <id>" },
             { "kizshop_setitemprice_usage", "Usage: /kizshop setitemprice <id> <buyPrice> [sellPrice]" },
@@ -197,7 +218,7 @@ namespace KizShop
             { "bounty_target_not_found", "<color=red>Target player '{0}' not found.</color>" },
             { "bounty_self", "<color=red>You cannot place a bounty on yourself.</color>" },
             { "bounty_max_target", "<color=red>This would exceed the maximum active bounty on this target ({0}).</color>" },
-            { "bounty_insufficient_funds", "<color=red>You need {0} to place this bounty, but only have {1}.</color>" },
+            { "bounty_insufficient_funds", "<color=red>You need {2} more to place this bounty (price {0}, balance {1}).</color>" },
             { "bounty_set_success", "<color=green>Bounty of {0} placed on {1}!</color>" },
             { "bounty_failed", "<color=red>Failed to place bounty, escrow refunded.</color>" },
             { "bounty_broadcast", "<color=yellow>[BOUNTY] {0} placed a bounty of {1} on {2}!</color>" },
@@ -240,6 +261,7 @@ namespace KizShop
         };
 
         public override TranslationList DefaultTranslations => _defaultTranslations;
+        public static TranslationList DefaultTranslationsStatic => _defaultTranslations;
 
         protected override void Load()
         {
@@ -258,11 +280,27 @@ namespace KizShop
                 // 1. Initialize Storage
                 try
                 {
-                    Storage = StorageFactory.Create(
+                    StorageMetrics = new StorageMetrics();
+                    RateLimiter = new CommandRateLimiter(Clock);
+                    BalTopCache = new TtlCache<int, System.Collections.Generic.List<TopBalanceEntry>>(256, Clock);
+                    HistoryCache = new TtlCache<string, System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>>(256, Clock);
+                    StorageBackendName = Configuration.Instance.DatabaseType;
+
+                    TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+                    var rawStorage = StorageFactory.Create(
                         Configuration.Instance.DatabaseType,
                         Configuration.Instance.ConnectionString,
                         Directory);
-                    Storage.InitializeAsync().GetAwaiter().GetResult();
+                    rawStorage.InitializeAsync().GetAwaiter().GetResult();
+
+                    Storage = new InstrumentedKizStorage(
+                        rawStorage,
+                        () => Configuration.Instance.StorageSlowCallWarnMs,
+                        steamId => InvalidateHistoryCache(steamId),
+                        StorageMetrics);
+
+                    BackupManager = new DatabaseBackupManager(Directory, Storage, () => Configuration.Instance, Clock);
                 }
                 catch (Exception storageEx)
                 {
@@ -274,7 +312,7 @@ namespace KizShop
                 // Initial prune & start 6-hour prune cycle
                 if (Configuration.Instance.LogRetentionDays > 0)
                 {
-                    _ = Storage.PruneLogsAsync(Configuration.Instance.LogRetentionDays);
+                    FireAndForget.Run(() => Storage.PruneLogsAsync(Configuration.Instance.LogRetentionDays), "InitialPruneLogs");
                     StartLogPruneLoop();
                 }
 
@@ -316,37 +354,37 @@ namespace KizShop
                 // Connect transaction alerts to webhooks
                 Transactions.OnItemPurchased += (steamId, entry, qty, price, newBal) =>
                 {
-                    _ = DiscordWebhook?.SendPurchaseAlertAsync(steamId, entry.Name, qty, price, newBal);
+                    FireAndForget.Run(() => DiscordWebhook?.SendPurchaseAlertAsync(steamId, entry.Name, qty, price, newBal), "DiscordPurchaseAlert");
                     if (price.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
                     {
-                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "Purchase", price, $"{qty}x {entry.Name}");
+                        FireAndForget.Run(() => DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "Purchase", price, $"{qty}x {entry.Name}"), "DiscordPurchaseAlertLarge");
                     }
                 };
 
                 Transactions.OnItemSold += (steamId, entry, qty, payout, newBal) =>
                 {
-                    _ = DiscordWebhook?.SendSaleAlertAsync(steamId, entry.Name, qty, payout, newBal);
+                    FireAndForget.Run(() => DiscordWebhook?.SendSaleAlertAsync(steamId, entry.Name, qty, payout, newBal), "DiscordSaleAlert");
                     if (payout.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
                     {
-                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "Sale", payout, $"{qty}x {entry.Name}");
+                        FireAndForget.Run(() => DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "Sale", payout, $"{qty}x {entry.Name}"), "DiscordSaleAlertLarge");
                     }
                 };
 
                 Transactions.OnVehiclePurchased += (steamId, entry, price, newBal) =>
                 {
-                    _ = DiscordWebhook?.SendPurchaseAlertAsync(steamId, $"Vehicle {entry.Name}", 1, price, newBal);
+                    FireAndForget.Run(() => DiscordWebhook?.SendPurchaseAlertAsync(steamId, $"Vehicle {entry.Name}", 1, price, newBal), "DiscordVehiclePurchaseAlert");
                     if (price.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
                     {
-                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "VehiclePurchase", price, entry.Name);
+                        FireAndForget.Run(() => DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "VehiclePurchase", price, entry.Name), "DiscordVehiclePurchaseAlertLarge");
                     }
                 };
 
                 Transactions.OnKitPurchased += (steamId, entry, price, newBal) =>
                 {
-                    _ = DiscordWebhook?.SendPurchaseAlertAsync(steamId, $"Kit {entry.DisplayName ?? entry.Name}", 1, price, newBal);
+                    FireAndForget.Run(() => DiscordWebhook?.SendPurchaseAlertAsync(steamId, $"Kit {entry.DisplayName ?? entry.Name}", 1, price, newBal), "DiscordKitPurchaseAlert");
                     if (price.ToDecimal() >= Configuration.Instance.DiscordLargeTransactionThreshold)
                     {
-                        _ = DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "KitPurchase", price, entry.DisplayName ?? entry.Name);
+                        FireAndForget.Run(() => DiscordWebhook?.SendLargeTransactionAlertAsync(steamId, "KitPurchase", price, entry.DisplayName ?? entry.Name), "DiscordKitPurchaseAlertLarge");
                     }
                 };
 
@@ -366,8 +404,10 @@ namespace KizShop
                 // 6. Start Loops and background recovery
                 StartPlaytimeLoop();
                 StartBountySweepLoop();
-                _ = ResumeUnpaidRewardPayoutsAsync();
-                _ = ProcessExpiredBountiesSweepAsync();
+                StartBackupLoop();
+                StartRetentionPurgeLoop();
+                FireAndForget.Run(ResumeUnpaidRewardPayoutsAsync, "ResumeUnpaidRewardPayouts");
+                FireAndForget.Run(ProcessExpiredBountiesSweepAsync, "ProcessExpiredBountiesSweep");
 
                 int mainThreadId = (Dispatcher as RocketMainThreadDispatcher)?.MainThreadId ?? Thread.CurrentThread.ManagedThreadId;
                 Logger.Log(GetBuildIdentification(mainThreadId));
@@ -383,15 +423,41 @@ namespace KizShop
         {
             Level.onPostLevelLoaded -= HandlePostLevelLoaded;
 
+            TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException;
             StopPlaytimeLoop();
             StopLogPruneLoop();
             StopBountySweepLoop();
+            StopBackupLoop();
+            StopRetentionPurgeLoop();
 
             UnturnedPlayerEvents.OnPlayerDeath -= HandlePlayerDeath;
             UnturnedPlayerEvents.OnPlayerUpdateStat -= HandlePlayerStat;
             DamageTool.damagePlayerRequested -= HandleDamagePlayerRequested;
             Provider.onEnemyConnected -= HandleEnemyConnected;
             Provider.onEnemyDisconnected -= HandleEnemyDisconnected;
+
+            if (Configuration.Instance.BackupEnabled && BackupManager != null)
+            {
+                try
+                {
+                    if (BackupManager.ShouldBackupOnUnload(TimeSpan.FromHours(1)))
+                    {
+                        var unloadBackup = BackupManager.CreateBackupAsync().GetAwaiter().GetResult();
+                        if (unloadBackup.Success)
+                        {
+                            KizLog.Info($"[KizShop] Unload backup created: {unloadBackup.FileName}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    KizLog.Warning($"[KizShop] Unload backup failed: {ex.Message}");
+                }
+            }
+
+            BalTopCache?.Clear();
+            HistoryCache?.Clear();
+            RateLimiter?.Clear();
 
             if (DiscordBot != null)
             {
@@ -428,11 +494,17 @@ namespace KizShop
         {
             base.ReloadPlugin();
             Shop?.Load();
+            BalTopCache?.Clear();
+            HistoryCache?.Clear();
             Dispatcher.QueueOnMainThread(ValidateCatalog);
             StopPlaytimeLoop();
             StartPlaytimeLoop();
             StopLogPruneLoop();
             StartLogPruneLoop();
+            StopBackupLoop();
+            StartBackupLoop();
+            StopRetentionPurgeLoop();
+            StartRetentionPurgeLoop();
 
             DiscordBot?.Stop();
             DiscordBot?.Start();
@@ -722,7 +794,11 @@ namespace KizShop
             {
                 victimSteamId = parameters.player.channel.owner.playerID.steamID.m_SteamID;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // ponytail: best-effort victim steamID extraction from player channel
+                KizLog.Warning($"[KizShop] Could not extract victim SteamID in HandleDamagePlayerRequested: {ex.Message}");
+            }
 
             ulong attackerSteamId = parameters.killer.m_SteamID;
             if (victimSteamId == 0 || attackerSteamId == 0 || victimSteamId == attackerSteamId) return;
@@ -743,7 +819,11 @@ namespace KizShop
                         CombatTag?.Tag(attackerSteamId, victimSteamId);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // ponytail: best-effort combat tagging on main thread
+                    KizLog.Warning($"[KizShop] Deferred combat tagging error for {attackerSteamId}->{victimSteamId}: {ex.Message}");
+                }
             });
         }
 
@@ -804,6 +884,8 @@ namespace KizShop
                     CombatTag?.Clear(steamId);
                     Economy?.InvalidateCache(steamId);
                     Transactions?.ClearPlayerState(steamId);
+                    RateLimiter?.ClearPlayer(steamId);
+                    InvalidateHistoryCache(steamId);
                 }
             }
             catch (Exception ex)
@@ -1098,7 +1180,11 @@ namespace KizShop
                             }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        // ponytail: best-effort kill cooldown dictionary cleanup
+                        KizLog.Warning($"[KizShop] Error during kill cooldown cleanup: {ex.Message}");
+                    }
                 }
             }, token);
         }
@@ -1110,6 +1196,215 @@ namespace KizShop
                 _logPruneCts.Cancel();
                 _logPruneCts.Dispose();
                 _logPruneCts = null;
+            }
+        }
+
+        public bool CheckRateLimit(IRocketPlayer caller, string bucket, int intervalMs, out double remainingSeconds)
+        {
+            remainingSeconds = 0;
+            if (caller == null) return true;
+            if (caller.IsAdmin || caller.HasPermission("kizshop.admin")) return true;
+            if (caller is Rocket.API.ConsolePlayer) return true;
+            if (RateLimiter == null || !Configuration.Instance.RateLimitEnabled || intervalMs <= 0) return true;
+
+            if (caller is UnturnedPlayer up)
+            {
+                ulong steamId = up.CSteamID.m_SteamID;
+                return RateLimiter.TryAcquire(steamId, bucket, intervalMs, out remainingSeconds);
+            }
+            return true;
+        }
+
+        public System.Collections.Generic.List<string> GetPlayerGroupIds(IRocketPlayer player)
+        {
+            var list = new System.Collections.Generic.List<string>();
+            if (player == null) return list;
+            try
+            {
+                var groups = Rocket.Core.R.Permissions.GetGroups(player, true);
+                if (groups != null)
+                {
+                    foreach (var g in groups)
+                    {
+                        if (!string.IsNullOrEmpty(g.Id))
+                        {
+                            list.Add(g.Id);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Rocket permissions provider unavailable or stubbed
+            }
+            return list;
+        }
+
+        public void InvalidateHistoryCache(ulong steamId)
+        {
+            if (HistoryCache == null) return;
+            HistoryCache.RemoveWhere(k => k.StartsWith($"{steamId}:", StringComparison.Ordinal));
+        }
+
+        public void ClearBalTopCache()
+        {
+            BalTopCache?.Clear();
+        }
+
+        public async Task<System.Collections.Generic.List<TopBalanceEntry>> GetCachedBalTopAsync(int count)
+        {
+            int ttl = Configuration.Instance.BalTopCacheSeconds;
+            if (ttl > 0 && BalTopCache != null && BalTopCache.TryGet(count, out var cached))
+            {
+                return cached;
+            }
+
+            var list = await Storage.GetTopBalancesAsync(count).ConfigureAwait(false);
+            if (ttl > 0 && BalTopCache != null && list != null)
+            {
+                BalTopCache.Set(count, list, ttl);
+            }
+            return list;
+        }
+
+        public async Task<System.Collections.Generic.List<KizShop.Economy.Models.TransactionRecord>> GetCachedHistoryAsync(ulong steamId, int page, int pageSize, int offset)
+        {
+            string key = $"{steamId}:{page}";
+            int ttl = Configuration.Instance.HistoryCacheSeconds;
+            if (ttl > 0 && HistoryCache != null && HistoryCache.TryGet(key, out var cached))
+            {
+                return cached;
+            }
+
+            var records = await Storage.GetTransactionHistoryAsync(steamId, pageSize, offset).ConfigureAwait(false);
+            if (ttl > 0 && HistoryCache != null && records != null)
+            {
+                HistoryCache.Set(key, records, ttl);
+            }
+            return records;
+        }
+
+        private void OnUnobservedTaskException(object sender, UnobservedTaskExceptionEventArgs e)
+        {
+            e.SetObserved();
+            KizLog.Error($"[KizShop] Unobserved task exception: {e.Exception}");
+        }
+
+        private void StartBackupLoop()
+        {
+            StopBackupLoop();
+            if (!Configuration.Instance.BackupEnabled) return;
+
+            _backupLoopCts = new CancellationTokenSource();
+            var token = _backupLoopCts.Token;
+
+            FireAndForget.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(120000, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                while (!token.IsCancellationRequested)
+                {
+                    if (Configuration.Instance.BackupEnabled && BackupManager != null)
+                    {
+                        var res = await BackupManager.CreateBackupAsync().ConfigureAwait(false);
+                        if (res.Success)
+                        {
+                            string formattedSize = DatabaseBackupManager.FormatFileSize(res.FileSize);
+                            LastBackupStatus = $"{res.FileName} ({formattedSize}) at {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC";
+                        }
+                        else
+                        {
+                            LastBackupStatus = $"Failed: {res.Message} at {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC";
+                        }
+                    }
+
+                    int hours = Math.Max(1, Configuration.Instance.BackupIntervalHours);
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromHours(hours), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            }, "DatabaseBackupLoop");
+        }
+
+        private void StopBackupLoop()
+        {
+            if (_backupLoopCts != null)
+            {
+                _backupLoopCts.Cancel();
+                _backupLoopCts.Dispose();
+                _backupLoopCts = null;
+            }
+        }
+
+        private void StartRetentionPurgeLoop()
+        {
+            StopRetentionPurgeLoop();
+            if (Configuration.Instance.TransactionRetentionDays <= 0) return;
+
+            _retentionPurgeCts = new CancellationTokenSource();
+            var token = _retentionPurgeCts.Token;
+
+            FireAndForget.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(60000, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                while (!token.IsCancellationRequested)
+                {
+                    int days = Configuration.Instance.TransactionRetentionDays;
+                    if (days > 0 && Storage != null)
+                    {
+                        try
+                        {
+                            var cutoff = DateTime.UtcNow.AddDays(-days);
+                            int purged = await Storage.PurgeTransactionsOlderThanAsync(cutoff).ConfigureAwait(false);
+                            LastPurgeStatus = $"{purged} rows at {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC";
+                            KizLog.Info($"[KizShop] Transaction retention purge completed: {purged} transactions removed (older than {days} days).");
+                        }
+                        catch (Exception ex)
+                        {
+                            LastPurgeStatus = $"Failed: {ex.Message}";
+                            KizLog.Error($"[KizShop] Retention purge error: {ex}");
+                        }
+                    }
+
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromHours(24), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            }, "RetentionPurgeLoop");
+        }
+
+        private void StopRetentionPurgeLoop()
+        {
+            if (_retentionPurgeCts != null)
+            {
+                _retentionPurgeCts.Cancel();
+                _retentionPurgeCts.Dispose();
+                _retentionPurgeCts = null;
             }
         }
     }

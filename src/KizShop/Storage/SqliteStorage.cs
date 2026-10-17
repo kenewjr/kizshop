@@ -72,7 +72,7 @@ namespace KizShop.Storage
                             details TEXT
                         );
 
-                        CREATE INDEX IF NOT EXISTS idx_kiz_tx_steam ON kiz_transactions(steam_id);
+                        CREATE INDEX IF NOT EXISTS idx_kiz_tx_steam_time ON kiz_transactions(steam_id, timestamp DESC);
                         CREATE INDEX IF NOT EXISTS idx_kiz_tx_time ON kiz_transactions(timestamp);
 
                         CREATE TABLE IF NOT EXISTS kiz_reward_events (
@@ -140,7 +140,10 @@ namespace KizShop.Storage
                         alterCmd.CommandText = "ALTER TABLE kiz_bounties ADD COLUMN refund_pending INTEGER NOT NULL DEFAULT 0;";
                         await alterCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
-                    catch { /* column already exists */ }
+                    catch (Exception ex)
+                    {
+                        KizLog.Warning($"[KizShop] SQLite migration notice for bounties refund_pending column: {ex.Message}");
+                    }
 
                     try
                     {
@@ -148,7 +151,10 @@ namespace KizShop.Storage
                         idxCmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_kiz_bounties_pending ON kiz_bounties(refund_pending);";
                         await idxCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        KizLog.Warning($"[KizShop] SQLite migration notice for bounties pending index: {ex.Message}");
+                    }
 
                     try
                     {
@@ -156,7 +162,10 @@ namespace KizShop.Storage
                         uqCmd.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_kiz_payouts_event_steam ON kiz_reward_payouts(event_key, steam_id);";
                         await uqCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        KizLog.Warning($"[KizShop] SQLite migration notice for payouts unique index: {ex.Message}");
+                    }
 
                     try
                     {
@@ -164,7 +173,21 @@ namespace KizShop.Storage
                         balCmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_kiz_accounts_balance ON kiz_accounts(balance DESC);";
                         await balCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        KizLog.Warning($"[KizShop] SQLite migration notice for accounts balance index: {ex.Message}");
+                    }
+
+                    try
+                    {
+                        using var txIdxCmd = conn.CreateCommand();
+                        txIdxCmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_kiz_tx_steam_time ON kiz_transactions(steam_id, timestamp DESC);";
+                        await txIdxCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        KizLog.Warning($"[KizShop] SQLite migration notice for transactions composite index: {ex.Message}");
+                    }
                 }
                 finally
                 {
@@ -689,7 +712,7 @@ namespace KizShop.Storage
                         SELECT timestamp, steam_id, type, amount, details
                         FROM kiz_transactions
                         WHERE steam_id = @id
-                        ORDER BY rowid DESC
+                        ORDER BY timestamp DESC
                         LIMIT @limit OFFSET @offset;
                     ";
                     cmd.Parameters.AddWithValue("@id", steamId.ToString());
@@ -1641,6 +1664,154 @@ namespace KizShop.Storage
                     cmd.Parameters.AddWithValue("@kit_name", kitName?.ToLowerInvariant() ?? string.Empty);
 
                     await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> PurgeTransactionsOlderThanAsync(DateTime cutoffUtc)
+        {
+            var cutoff = (cutoffUtc.Kind == DateTimeKind.Utc ? cutoffUtc : cutoffUtc.ToUniversalTime()).ToString("o");
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    int totalDeleted = 0;
+                    while (true)
+                    {
+                        using var cmd = conn.CreateCommand();
+                        cmd.CommandText = "DELETE FROM kiz_transactions WHERE rowid IN (SELECT rowid FROM kiz_transactions WHERE timestamp < @cutoff LIMIT 1000);";
+                        cmd.Parameters.AddWithValue("@cutoff", cutoff);
+                        int count = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                        totalDeleted += count;
+                        if (count == 0) break;
+                    }
+                    return totalDeleted;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetAccountCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT COUNT(*) FROM kiz_accounts;";
+                    var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    return Convert.ToInt32(result);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetTransactionCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT COUNT(*) FROM kiz_transactions;";
+                    var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    return Convert.ToInt32(result);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetPendingPayoutCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT COUNT(*) FROM kiz_reward_payouts WHERE status != 'Paid';";
+                    var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    return Convert.ToInt32(result);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetPendingBountyRefundCountAsync()
+        {
+            return await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    using var conn = new SqliteConnection(_connectionString);
+                    await conn.OpenAsync().ConfigureAwait(false);
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT COUNT(*) FROM kiz_bounties WHERE refund_pending != 0;";
+                    var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                    return Convert.ToInt32(result);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task BackupAsync(string destinationPath)
+        {
+            await Task.Run(async () =>
+            {
+                await _semaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    if (File.Exists(destinationPath))
+                        File.Delete(destinationPath);
+
+                    using var sourceConn = new SqliteConnection(_connectionString);
+                    await sourceConn.OpenAsync().ConfigureAwait(false);
+
+                    var destBuilder = new SqliteConnectionStringBuilder
+                    {
+                        DataSource = destinationPath,
+                        Mode = SqliteOpenMode.ReadWriteCreate
+                    };
+                    using var destConn = new SqliteConnection(destBuilder.ToString());
+                    await destConn.OpenAsync().ConfigureAwait(false);
+
+                    sourceConn.BackupDatabase(destConn);
                 }
                 finally
                 {

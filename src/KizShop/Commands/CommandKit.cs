@@ -18,33 +18,55 @@ namespace KizShop.Commands
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
+            var plugin = KizShopPlugin.Instance;
+            var playerGroups = plugin?.GetPlayerGroupIds(caller) ?? new List<string>();
+            bool isAdmin = caller.HasPermission("kizshop.admin");
+
             CommandRunner.Run(caller, async () =>
             {
-                var plugin = KizShopPlugin.Instance;
                 var player = (UnturnedPlayer)caller;
                 ulong steamId = player.CSteamID.m_SteamID;
+                var cfg = plugin.Configuration.Instance;
 
                 // 1. List kits if no argument provided
                 if (command.Length == 0)
                 {
-                    var kits = plugin.Shop.GetKits(enabledOnly: true);
+                    var allKits = plugin.Shop.GetKits(enabledOnly: true);
                     plugin.Dispatcher.QueueOnMainThread(() =>
                     {
-                        if (kits.Count == 0)
+                        var visibleKits = new List<KizShop.Shop.Models.KitShopEntry>();
+                        foreach (var k in allKits)
+                        {
+                            if (isAdmin || string.IsNullOrEmpty(k.RequiredPermission) || caller.HasPermission(k.RequiredPermission))
+                            {
+                                visibleKits.Add(k);
+                            }
+                        }
+
+                        if (visibleKits.Count == 0)
                         {
                             KizChat.Say(caller, plugin.Translate("kit_none_available"), UnityEngine.Color.yellow);
                             return;
                         }
 
                         KizChat.Say(caller, plugin.Translate("kit_list_header"), UnityEngine.Color.cyan);
-                        foreach (var kit in kits)
+                        foreach (var kit in visibleKits)
                         {
-                            var price = Money.FromDecimal(kit.BuyPrice);
+                            decimal effPrice = plugin.Shop.GetEffectiveKitPrice(kit, playerGroups);
+                            var price = Money.FromDecimal(effPrice);
                             var formattedPrice = plugin.FormatMoney(price);
                             KizChat.Say(caller, plugin.Translate("kit_list_entry", kit.Name, kit.DisplayName ?? kit.Name, formattedPrice, kit.Description ?? ""), UnityEngine.Color.yellow);
                         }
                         KizChat.Say(caller, plugin.Translate("kit_list_footer"), UnityEngine.Color.white);
                     });
+                    return;
+                }
+
+                // Rate limit kit purchases
+                if (!plugin.CheckRateLimit(caller, "buy", cfg.RateLimitBuyMs, out double remSecs))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("rate_limited", DurationFormatter.FormatSeconds(remSecs, true)), UnityEngine.Color.red));
                     return;
                 }
 
@@ -59,12 +81,12 @@ namespace KizShop.Commands
                     kitName = string.Join(" ", command).Trim();
                 }
 
-                bool isAdmin = caller.HasPermission("kizshop.admin");
                 var result = await plugin.Transactions.BuyKitAsync(
                     steamId,
                     kitName,
                     caller.HasPermission,
-                    isAdmin).ConfigureAwait(false);
+                    isAdmin,
+                    playerGroups).ConfigureAwait(false);
 
                 plugin.Dispatcher.QueueOnMainThread(() =>
                 {
@@ -82,6 +104,11 @@ namespace KizShop.Commands
                         {
                             case "kit_not_found":
                                 KizChat.Say(caller, plugin.Translate("kit_not_found", kitName), UnityEngine.Color.red);
+                                var suggestions = plugin.Shop.GetSuggestions(kitName, "Kit", 3);
+                                if (suggestions.Count > 0)
+                                {
+                                    KizChat.Say(caller, plugin.Translate("did_you_mean", string.Join(", ", suggestions)), UnityEngine.Color.yellow);
+                                }
                                 break;
                             case "kit_disabled":
                                 KizChat.Say(caller, plugin.Translate("kit_disabled"), UnityEngine.Color.red);
@@ -93,7 +120,12 @@ namespace KizShop.Commands
                                 KizChat.Say(caller, plugin.Translate("combat_tagged", result.ErrorArgs != null && result.ErrorArgs.Length > 0 ? result.ErrorArgs[0] : 0), UnityEngine.Color.red);
                                 break;
                             case "kit_cooldown":
-                                KizChat.Say(caller, plugin.Translate("kit_cooldown", result.ErrorArgs != null && result.ErrorArgs.Length > 0 ? result.ErrorArgs[0] : 0), UnityEngine.Color.red);
+                                {
+                                    string formattedWait = (result.ErrorArgs != null && result.ErrorArgs.Length > 1)
+                                        ? result.ErrorArgs[1].ToString()
+                                        : (result.ErrorArgs != null && result.ErrorArgs.Length > 0 ? DurationFormatter.FormatSeconds(Convert.ToInt32(result.ErrorArgs[0])) : "0s");
+                                    KizChat.Say(caller, plugin.Translate("kit_cooldown", formattedWait), UnityEngine.Color.red);
+                                }
                                 break;
                             case "invalid_money_amount":
                                 KizChat.Say(caller, plugin.Translate("invalid_money_amount", result.ErrorArgs != null && result.ErrorArgs.Length > 0 ? result.ErrorArgs[0] : ""), UnityEngine.Color.red);
@@ -109,7 +141,8 @@ namespace KizShop.Commands
                                     var price = result.ErrorArgs != null && result.ErrorArgs.Length > 0 ? plugin.FormatMoney((Money)result.ErrorArgs[0]) : "$0";
                                     string name = result.ErrorArgs != null && result.ErrorArgs.Length > 1 ? result.ErrorArgs[1].ToString() : kitName;
                                     var bal = result.ErrorArgs != null && result.ErrorArgs.Length > 2 ? plugin.FormatMoney((Money)result.ErrorArgs[2]) : "$0";
-                                    KizChat.Say(caller, plugin.Translate("kit_insufficient_funds", price, name, bal), UnityEngine.Color.red);
+                                    var shortfall = result.ErrorArgs != null && result.ErrorArgs.Length > 3 ? plugin.FormatMoney((Money)result.ErrorArgs[3]) : "$0";
+                                    KizChat.Say(caller, plugin.Translate("kit_insufficient_funds", price, name, bal, shortfall), UnityEngine.Color.red);
                                 }
                                 break;
                             case "kit_delivery_failed":

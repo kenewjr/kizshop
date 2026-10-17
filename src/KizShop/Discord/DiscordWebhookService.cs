@@ -180,7 +180,12 @@ namespace KizShop.Discord
 
         public void Dispose()
         {
-            try { _httpClient?.Dispose(); } catch { }
+            try { _httpClient?.Dispose(); }
+            catch (Exception ex)
+            {
+                // ponytail: best-effort httpClient disposal
+                KizLog.Warning($"[KizShop] DiscordWebhookService HttpClient dispose notice: {ex.Message}");
+            }
         }
     }
 }

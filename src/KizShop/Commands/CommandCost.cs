@@ -99,7 +99,14 @@ namespace KizShop.Commands
                 }
 
                 plugin.Dispatcher.QueueOnMainThread(() =>
-                    KizChat.Say(caller, plugin.Translate("cost_not_found", query), UnityEngine.Color.red));
+                {
+                    KizChat.Say(caller, plugin.Translate("cost_not_found", query), UnityEngine.Color.red);
+                    var suggestions = plugin.Shop.GetSuggestions(query, null, 3);
+                    if (suggestions.Count > 0)
+                    {
+                        KizChat.Say(caller, plugin.Translate("did_you_mean", string.Join(", ", suggestions)), UnityEngine.Color.yellow);
+                    }
+                });
             });
         }
     }

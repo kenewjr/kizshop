@@ -74,6 +74,10 @@
 | `/giveaway <amount\|confirm>` | `/giveall` | Admin: distribute money to all online players with 30s confirmation | `kizshop.giveaway`, `kizshop.admin` |
 | `/eco <give\|take\|set> <player> <amount>` | `/economy` | Admin: adjust player balances | `kizshop.eco`, `kizshop.admin` |
 | `/kizshop [version]` | `/ks` | Admin: print build version or admin menu | `kizshop.admin` |
+| `/kizshop status` | | Admin: view detailed system status, counts, cache stats, and storage latency | `kizshop.admin` |
+| `/kizshop backup` | | Admin: create an immediate database backup and report file name & size | `kizshop.admin` |
+| `/kizshop kitperm <kit> <perm\|none>` | | Admin: assign or clear required permission for a bundle kit | `kizshop.admin` |
+| `/kizshop kitdiscount <kit> <group> <mult\|none>` | | Admin: assign group price multiplier (0.10..1.00) or clear discount | `kizshop.admin` |
 | `/kizshop reload` | | Admin: reload config & shop catalog | `kizshop.admin` |
 | `/kizshop additem <id> <name> <buy> [sell] [perm] [category]` | | Admin: add or update an item entry | `kizshop.admin` |
 | `/kizshop removeitem <id>` | | Admin: remove an item from shop | `kizshop.admin` |
@@ -227,8 +231,27 @@ Keep these restricted to administrators:
   <DailyMaxStreakDays>7</DailyMaxStreakDays>
   <DailyResetUtcOffsetHours>7</DailyResetUtcOffsetHours>
   
-  <!-- Transaction Log Pruning (days to keep, 0 = keep forever) -->
-  <LogRetentionDays>30</LogRetentionDays>
+  <!-- Short-Lived Query Caches (0 disables) -->
+  <BalTopCacheSeconds>30</BalTopCacheSeconds>
+  <HistoryCacheSeconds>15</HistoryCacheSeconds>
+
+  <!-- Per-Player Command Rate Limiting (intervals in milliseconds) -->
+  <RateLimitEnabled>true</RateLimitEnabled>
+  <RateLimitBuyMs>700</RateLimitBuyMs>
+  <RateLimitSellAllMs>1500</RateLimitSellAllMs>
+  <RateLimitHistoryMs>1500</RateLimitHistoryMs>
+  <RateLimitBalTopMs>2000</RateLimitBalTopMs>
+  <RateLimitSearchMs>1000</RateLimitSearchMs>
+
+  <!-- Automatic Database Backups -->
+  <BackupEnabled>true</BackupEnabled>
+  <BackupIntervalHours>6</BackupIntervalHours>
+  <BackupKeepCount>10</BackupKeepCount>
+
+  <!-- Storage Latency & Retention -->
+  <StorageSlowCallWarnMs>500</StorageSlowCallWarnMs>
+  <TransactionRetentionDays>90</TransactionRetentionDays>
+  <LogRetentionDays>90</LogRetentionDays>
   
   <!-- Kill Rewards & Abuse Prevention -->
   <PlayerKillRewardEnabled>true</PlayerKillRewardEnabled>

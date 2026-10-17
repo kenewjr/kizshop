@@ -104,6 +104,25 @@ namespace KizShop
         // Giveaway Safeguards
         public decimal GiveawayMaxPerPlayer { get; set; } = 1000.00m;
 
+        // Optimization & Caches (Addendum 10)
+        public int BalTopCacheSeconds { get; set; } = 30;
+        public int HistoryCacheSeconds { get; set; } = 15;
+
+        // Rate Limiting (Addendum 10)
+        public bool RateLimitEnabled { get; set; } = true;
+        public int RateLimitSellAllMs { get; set; } = 1500;
+        public int RateLimitBuyMs { get; set; } = 700;
+        public int RateLimitHistoryMs { get; set; } = 1500;
+        public int RateLimitBalTopMs { get; set; } = 2000;
+        public int RateLimitSearchMs { get; set; } = 1000;
+
+        // Retention & Backups (Addendum 10)
+        public int TransactionRetentionDays { get; set; } = 90;
+        public bool BackupEnabled { get; set; } = true;
+        public int BackupIntervalHours { get; set; } = 6;
+        public int BackupKeepCount { get; set; } = 10;
+        public int StorageSlowCallWarnMs { get; set; } = 500;
+
         public void LoadDefaults()
         {
             DatabaseType = "LiteDB";
@@ -186,6 +205,20 @@ namespace KizShop
             SaleMinBuyMultiplier = 0.10m;
             SaleMaxSellMultiplier = 2.00m;
             GiveawayMaxPerPlayer = 1000.00m;
+
+            BalTopCacheSeconds = 30;
+            HistoryCacheSeconds = 15;
+            RateLimitEnabled = true;
+            RateLimitSellAllMs = 1500;
+            RateLimitBuyMs = 700;
+            RateLimitHistoryMs = 1500;
+            RateLimitBalTopMs = 2000;
+            RateLimitSearchMs = 1000;
+            TransactionRetentionDays = 90;
+            BackupEnabled = true;
+            BackupIntervalHours = 6;
+            BackupKeepCount = 10;
+            StorageSlowCallWarnMs = 500;
         }
 
         public void Normalize()
@@ -277,6 +310,92 @@ namespace KizShop
             {
                 Common.KizLog.Warning($"[KizShop] Configuration GiveawayMaxPerPlayer ({GiveawayMaxPerPlayer}) corrected to 0.");
                 GiveawayMaxPerPlayer = 0m;
+            }
+
+            if (BalTopCacheSeconds < 0 || BalTopCacheSeconds > 600)
+            {
+                int clamped = System.Math.Clamp(BalTopCacheSeconds, 0, 600);
+                Common.KizLog.Warning($"[KizShop] Configuration BalTopCacheSeconds ({BalTopCacheSeconds}) clamped to {clamped}.");
+                BalTopCacheSeconds = clamped;
+            }
+
+            if (HistoryCacheSeconds < 0 || HistoryCacheSeconds > 300)
+            {
+                int clamped = System.Math.Clamp(HistoryCacheSeconds, 0, 300);
+                Common.KizLog.Warning($"[KizShop] Configuration HistoryCacheSeconds ({HistoryCacheSeconds}) clamped to {clamped}.");
+                HistoryCacheSeconds = clamped;
+            }
+
+            if (RateLimitSellAllMs < 0 || RateLimitSellAllMs > 30000)
+            {
+                int clamped = System.Math.Clamp(RateLimitSellAllMs, 0, 30000);
+                Common.KizLog.Warning($"[KizShop] Configuration RateLimitSellAllMs ({RateLimitSellAllMs}) clamped to {clamped}.");
+                RateLimitSellAllMs = clamped;
+            }
+
+            if (RateLimitBuyMs < 0 || RateLimitBuyMs > 30000)
+            {
+                int clamped = System.Math.Clamp(RateLimitBuyMs, 0, 30000);
+                Common.KizLog.Warning($"[KizShop] Configuration RateLimitBuyMs ({RateLimitBuyMs}) clamped to {clamped}.");
+                RateLimitBuyMs = clamped;
+            }
+
+            if (RateLimitHistoryMs < 0 || RateLimitHistoryMs > 30000)
+            {
+                int clamped = System.Math.Clamp(RateLimitHistoryMs, 0, 30000);
+                Common.KizLog.Warning($"[KizShop] Configuration RateLimitHistoryMs ({RateLimitHistoryMs}) clamped to {clamped}.");
+                RateLimitHistoryMs = clamped;
+            }
+
+            if (RateLimitBalTopMs < 0 || RateLimitBalTopMs > 30000)
+            {
+                int clamped = System.Math.Clamp(RateLimitBalTopMs, 0, 30000);
+                Common.KizLog.Warning($"[KizShop] Configuration RateLimitBalTopMs ({RateLimitBalTopMs}) clamped to {clamped}.");
+                RateLimitBalTopMs = clamped;
+            }
+
+            if (RateLimitSearchMs < 0 || RateLimitSearchMs > 30000)
+            {
+                int clamped = System.Math.Clamp(RateLimitSearchMs, 0, 30000);
+                Common.KizLog.Warning($"[KizShop] Configuration RateLimitSearchMs ({RateLimitSearchMs}) clamped to {clamped}.");
+                RateLimitSearchMs = clamped;
+            }
+
+            if (TransactionRetentionDays < 0 || TransactionRetentionDays > 3650)
+            {
+                int clamped = System.Math.Clamp(TransactionRetentionDays, 0, 3650);
+                Common.KizLog.Warning($"[KizShop] Configuration TransactionRetentionDays ({TransactionRetentionDays}) clamped to {clamped}.");
+                TransactionRetentionDays = clamped;
+            }
+
+            if (BackupIntervalHours < 1 || BackupIntervalHours > 168)
+            {
+                int clamped = System.Math.Clamp(BackupIntervalHours, 1, 168);
+                Common.KizLog.Warning($"[KizShop] Configuration BackupIntervalHours ({BackupIntervalHours}) clamped to {clamped}.");
+                BackupIntervalHours = clamped;
+            }
+
+            if (BackupKeepCount < 1 || BackupKeepCount > 100)
+            {
+                int clamped = System.Math.Clamp(BackupKeepCount, 1, 100);
+                Common.KizLog.Warning($"[KizShop] Configuration BackupKeepCount ({BackupKeepCount}) clamped to {clamped}.");
+                BackupKeepCount = clamped;
+            }
+
+            if (StorageSlowCallWarnMs < 0)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration StorageSlowCallWarnMs ({StorageSlowCallWarnMs}) corrected to 0.");
+                StorageSlowCallWarnMs = 0;
+            }
+            else if (StorageSlowCallWarnMs > 0 && StorageSlowCallWarnMs < 50)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration StorageSlowCallWarnMs ({StorageSlowCallWarnMs}) clamped to 50.");
+                StorageSlowCallWarnMs = 50;
+            }
+            else if (StorageSlowCallWarnMs > 10000)
+            {
+                Common.KizLog.Warning($"[KizShop] Configuration StorageSlowCallWarnMs ({StorageSlowCallWarnMs}) clamped to 10000.");
+                StorageSlowCallWarnMs = 10000;
             }
         }
     }

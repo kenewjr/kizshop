@@ -51,7 +51,14 @@ namespace KizShop.Commands
                     }
                     else
                     {
-                        KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
+                        if (result.ErrorKey == "vehicle_cooldown" && result.ErrorArgs != null && result.ErrorArgs.Length > 1)
+                        {
+                            KizChat.Say(caller, plugin.Translate("vehicle_cooldown", result.ErrorArgs[1]), UnityEngine.Color.red);
+                        }
+                        else
+                        {
+                            KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
+                        }
                     }
                 });
             });

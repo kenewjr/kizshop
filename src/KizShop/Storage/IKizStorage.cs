@@ -53,5 +53,12 @@ namespace KizShop.Storage
         Task<DateTime?> GetKitCooldownAsync(ulong steamId, string kitName);
         Task SetKitCooldownAsync(ulong steamId, string kitName, DateTime lastPurchaseUtc);
         Task ClearKitCooldownAsync(ulong steamId, string kitName);
+
+        // Retention & Metrics
+        Task<int> PurgeTransactionsOlderThanAsync(DateTime cutoffUtc);
+        Task<int> GetAccountCountAsync();
+        Task<int> GetTransactionCountAsync();
+        Task<int> GetPendingPayoutCountAsync();
+        Task<int> GetPendingBountyRefundCountAsync();
     }
 }

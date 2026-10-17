@@ -17,7 +17,7 @@ namespace KizShop.Commands
         public AllowedCaller AllowedCaller => AllowedCaller.Both;
         public string Name => "kizshop";
         public string Help => "Admin command to manage KizShop.";
-        public string Syntax => "<version|reload|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway|sale|export>";
+        public string Syntax => "<version|reload|status|backup|kitperm|kitdiscount|additem|removeitem|setitemprice|addveh|removeveh|setvehprice|setcategory|resetpricing|import|giveaway|sale|export>";
         public List<string> Aliases => new List<string> { "ks" };
         public List<string> Permissions => new List<string> { "kizshop.admin" };
 
@@ -53,6 +53,120 @@ namespace KizShop.Commands
                         plugin.ReloadPlugin();
                         plugin.Dispatcher.QueueOnMainThread(() =>
                             KizChat.Say(caller, plugin.Translate("kizshop_reloaded"), UnityEngine.Color.green));
+                        break;
+
+                    case "status":
+                        {
+                            int accCount = await plugin.Storage.GetAccountCountAsync().ConfigureAwait(false);
+                            int txCount = await plugin.Storage.GetTransactionCountAsync().ConfigureAwait(false);
+                            int pendingPayouts = await plugin.Storage.GetPendingPayoutCountAsync().ConfigureAwait(false);
+                            int pendingBounties = await plugin.Storage.GetPendingBountyRefundCountAsync().ConfigureAwait(false);
+                            string backendName = plugin.StorageBackendName;
+                            var sale = plugin.Shop?.ActiveSale;
+                            string saleStr = (sale != null && sale.IsActive(DateTime.UtcNow))
+                                ? $"{sale.Name} (Buy x{sale.BuyMultiplier:0.##}, Sell x{sale.SellMultiplier:0.##}, {(int)Math.Max(0, (sale.ExpiresUtc - DateTime.UtcNow).TotalMinutes)}m left)"
+                                : "none";
+                            var bHits = plugin.BalTopCache?.Hits ?? 0;
+                            var bMiss = plugin.BalTopCache?.Misses ?? 0;
+                            var hHits = plugin.HistoryCache?.Hits ?? 0;
+                            var hMiss = plugin.HistoryCache?.Misses ?? 0;
+                            string cacheStr = $"baltop {bHits}h/{bMiss}m, history {hHits}h/{hMiss}m";
+                            string lastBackupStr = plugin.LastBackupStatus ?? "never";
+                            string lastPurgeStr = plugin.LastPurgeStatus ?? "never";
+                            var stats = plugin.StorageMetrics?.GetStats(TimeSpan.FromMinutes(5)) ?? (0.0, 0.0, 0);
+                            string latencyStr = $"avg {stats.AvgMs:F1}ms, max {stats.MaxMs:F1}ms (last 5m)";
+
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                            {
+                                KizChat.Say(caller, $"--- KizShop Status (v0.6.0) ---", UnityEngine.Color.cyan);
+                                KizChat.Say(caller, $"Storage: {backendName} | Accounts: {accCount} | Transactions: {txCount}", UnityEngine.Color.white);
+                                KizChat.Say(caller, $"Pending: {pendingPayouts} payouts, {pendingBounties} bounty refunds", UnityEngine.Color.white);
+                                KizChat.Say(caller, $"Active Sale: {saleStr}", UnityEngine.Color.yellow);
+                                KizChat.Say(caller, $"Caches: {cacheStr}", UnityEngine.Color.gray);
+                                KizChat.Say(caller, $"Latency: {latencyStr}", UnityEngine.Color.gray);
+                                KizChat.Say(caller, $"Last Backup: {lastBackupStr} | Last Purge: {lastPurgeStr}", UnityEngine.Color.gray);
+                            });
+                        }
+                        break;
+
+                    case "backup":
+                        {
+                            var backupRes = await plugin.BackupManager.CreateBackupAsync(isManual: true).ConfigureAwait(false);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                            {
+                                if (backupRes.Success)
+                                {
+                                    string formattedSize = KizShop.Storage.DatabaseBackupManager.FormatFileSize(backupRes.FileSize);
+                                    KizChat.Say(caller, plugin.Translate("kizshop_backup_success", backupRes.FileName, formattedSize), UnityEngine.Color.green);
+                                }
+                                else
+                                {
+                                    KizChat.Say(caller, plugin.Translate("kizshop_backup_failed", backupRes.Message), UnityEngine.Color.red);
+                                }
+                            });
+                        }
+                        break;
+
+                    case "kitperm":
+                        {
+                            if (args.Count < 3)
+                            {
+                                plugin.Dispatcher.QueueOnMainThread(() =>
+                                    KizChat.Say(caller, plugin.Translate("kizshop_kitperm_usage"), UnityEngine.Color.yellow));
+                                return;
+                            }
+                            string kpKit = args[1];
+                            string kpPerm = args[2].Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : args[2];
+                            bool kpSuccess = plugin.Shop.SetKitPermission(kpKit, kpPerm);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                            {
+                                if (kpSuccess)
+                                {
+                                    KizChat.Say(caller, plugin.Translate("kizshop_kitperm_success", kpKit, string.IsNullOrEmpty(kpPerm) ? "none" : kpPerm), UnityEngine.Color.green);
+                                }
+                                else
+                                {
+                                    KizChat.Say(caller, plugin.Translate("kit_not_found", kpKit), UnityEngine.Color.red);
+                                }
+                            });
+                        }
+                        break;
+
+                    case "kitdiscount":
+                        {
+                            if (args.Count < 4)
+                            {
+                                plugin.Dispatcher.QueueOnMainThread(() =>
+                                    KizChat.Say(caller, plugin.Translate("kizshop_kitdiscount_usage"), UnityEngine.Color.yellow));
+                                return;
+                            }
+                            string kdKit = args[1];
+                            string kdGroup = args[2];
+                            decimal? kdMult = null;
+                            if (!args[3].Equals("none", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (!decimal.TryParse(args[3], NumberStyles.Number, CultureInfo.InvariantCulture, out var multVal) || multVal < 0.10m || multVal > 1.00m)
+                                {
+                                    plugin.Dispatcher.QueueOnMainThread(() =>
+                                        KizChat.Say(caller, plugin.Translate("kizshop_kitdiscount_invalid"), UnityEngine.Color.red));
+                                    return;
+                                }
+                                kdMult = multVal;
+                            }
+                            bool kdSuccess = plugin.Shop.SetKitDiscount(kdKit, kdGroup, kdMult);
+                            plugin.Dispatcher.QueueOnMainThread(() =>
+                            {
+                                if (kdSuccess)
+                                {
+                                    string desc = kdMult.HasValue ? kdMult.Value.ToString("F2", CultureInfo.InvariantCulture) : "none";
+                                    KizChat.Say(caller, plugin.Translate("kizshop_kitdiscount_success", kdKit, kdGroup, desc), UnityEngine.Color.green);
+                                }
+                                else
+                                {
+                                    KizChat.Say(caller, plugin.Translate("kit_not_found", kdKit), UnityEngine.Color.red);
+                                }
+                            });
+                        }
                         break;
 
                     case "additem":

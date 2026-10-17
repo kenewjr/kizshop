@@ -55,7 +55,11 @@ namespace KizShop.Discord
             {
                 _cts?.Cancel();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // ponytail: best-effort cancellation token cancel
+                KizLog.Warning($"[KizShop] DiscordBotService cancellation error: {ex.Message}");
+            }
         }
 
         private async Task RunGatewayLoopAsync(CancellationToken ct)
@@ -169,7 +173,12 @@ namespace KizShop.Discord
                 sessionCts.Cancel();
                 if (heartbeatTask != null)
                 {
-                    try { await heartbeatTask.ConfigureAwait(false); } catch { }
+                    try { await heartbeatTask.ConfigureAwait(false); }
+                    catch (Exception hbEx)
+                    {
+                        // ponytail: best-effort heartbeat task drain during session teardown
+                        KizLog.Warning($"[KizShop] DiscordBotService heartbeat task completed with: {hbEx.Message}");
+                    }
                 }
             }
         }
@@ -352,7 +361,12 @@ namespace KizShop.Discord
             if (_disposed) return;
             _disposed = true;
             Stop();
-            try { _httpClient?.Dispose(); } catch { }
+            try { _httpClient?.Dispose(); }
+            catch (Exception ex)
+            {
+                // ponytail: best-effort httpClient disposal
+                KizLog.Warning($"[KizShop] DiscordBotService HttpClient dispose notice: {ex.Message}");
+            }
         }
     }
 }

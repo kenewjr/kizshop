@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-17
+
+### Added & Optimized
+- **A1. Short-Lived Caches (`TtlCache`)**:
+  - Generic thread-safe `TtlCache<TKey, TValue>` with atomic hit/miss counters, LRU eviction, and injectable `IClock`.
+  - `/baltop` cached by top-N with `BalTopCacheSeconds` (default 30s, clamp 0..600).
+  - `/history` cached per `(steamId, page)` with `HistoryCacheSeconds` (default 15s, clamp 0..300), invalidated immediately on player transactions or disconnects.
+- **A3. Per-Player Command Rate Limiting (`CommandRateLimiter`)**:
+  - Sliding time windows per `(steamId, bucket)` with periodic background prune.
+  - Configurable intervals: `RateLimitBuyMs` (700ms), `RateLimitSellAllMs` (1500ms), `RateLimitHistoryMs` (1500ms), `RateLimitBalTopMs` (2000ms), `RateLimitSearchMs` (1000ms), clamped to 0..30000ms. Admins and console exempt.
+  - Returns `rate_limited` translation displaying formatted wait time without taking locks or touching storage.
+- **A4. Transaction Retention & Batched Purge**:
+  - Configurable retention via `TransactionRetentionDays` (default 90 days, 0 = disabled, clamp 0..3650).
+  - `IKizStorage.PurgeTransactionsOlderThanAsync` implemented across LiteDB, SQLite, and MySQL using batched 1,000-row transactions. Scheduled at load and every 24 hours off the main thread.
+- **A5. Zero Silent Failures & Task Safety**:
+  - Eliminated silent `catch` blocks in `src/` with structured warning/error logs containing player and item context.
+  - Added `FireAndForget.Run` wrapping async background work with exception logging.
+  - Hooked `TaskScheduler.UnobservedTaskException` at startup; added automated CI/unit test detecting empty catch blocks.
+- **A6. Storage Index Audit & Composite Indexing**:
+  - Added composite index `(steam_id, timestamp DESC)` for fast history pagination across SQLite and MySQL.
+  - Verified idempotent table and index creation across LiteDB, SQLite, and MySQL (`information_schema.statistics` check).
+- **B1. Automatic Database Backups (`DatabaseBackupManager`)**:
+  - Scheduled backups via `BackupEnabled` (true), `BackupIntervalHours` (6h, 1..168), and `BackupKeepCount` (10, 1..100).
+  - Safe SQLite online backup API (`BackupDatabase`), LiteDB flush + checkpoint + `FileShare.ReadWrite` copy with retries, MySQL external delegation.
+  - Admin command `/kizshop backup` triggering manual backup with file name and size report.
+- **B2. Descriptive Error Messages & Human Duration Formatter**:
+  - Insufficient funds messages report exact shortfall, price, and current balance across items, vehicles, kits, payments, and bounties.
+  - `DurationFormatter` ("1d 2h", "1h 5m", "3m 20s", "45s", "0.5s") applied across cooldowns, rate limits, and combat tags.
+  - Space check failure messages detail missing inventory space where gateway provides details.
+  - Automated placeholder format validation test covering all translation keys.
+- **B3. /shop search & "Did You Mean" Suggestions**:
+  - `/shop search <text> [page]`: case-insensitive, accent-insensitive search across items, vehicles, and kits with 8 entries per page.
+  - Levenshtein-distance suggestions (distance <= 2 or prefix/contains) on unresolved `/buy`, `/sell`, `/cost`, `/kizkit` lookups via `did_you_mean`.
+  - Rebuilt normalized catalog search index on catalog changes.
+- **B4. VIP-Aware Kits**:
+  - Server-side `RequiredPermission` gate for kits.
+  - `GroupDiscounts`: permission-group price multipliers (0.10..1.00) resolved on main thread; lowest multiplier applied before active sale events.
+  - Delivery rollback refund returns exact discounted amount debited.
+  - Admin commands `/kizshop kitperm <kit> <permission|none>` and `/kizshop kitdiscount <kit> <group> <multiplier|none>`.
+- **B7. /kizshop status & Storage Metrics**:
+  - `/kizshop status` admin diagnostic report: versions, storage backend, account/transaction/bounty/reward counts, active sale info, cache hit/miss stats, last backup time/result, retention purge result, and 5-minute avg/max storage call latency.
+  - `StorageMetrics` ring buffer measuring hot storage latency; throttled warning if a call exceeds `StorageSlowCallWarnMs` (default 500ms, clamp 50..10000).
+
 ## [0.5.2] - 2026-10-17
 
 ### Fixed & Hardened

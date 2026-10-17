@@ -121,7 +121,10 @@ namespace KizShop.Storage
             {
                 lock (_dbLock)
                 {
-                    _db = new LiteDatabase(_dbPath);
+                    if (_db == null)
+                    {
+                        _db = new LiteDatabase(_dbPath);
+                    }
                     var versions = _db.GetCollection<SchemaVersionDoc>("schema_version");
                     if (versions.Count() == 0)
                     {
@@ -1009,6 +1012,72 @@ namespace KizShop.Storage
                     coll.Delete(id);
                 }
             }).ConfigureAwait(false);
+        }
+
+        public async Task<int> PurgeTransactionsOlderThanAsync(DateTime cutoffUtc)
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    var txs = _db.GetCollection<TransactionDoc>("transactions");
+                    var utcCutoff = cutoffUtc.Kind == DateTimeKind.Utc ? cutoffUtc : cutoffUtc.ToUniversalTime();
+                    int deleted = txs.DeleteMany(x => x.Timestamp < utcCutoff);
+                    return deleted;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetAccountCountAsync()
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    return _db.GetCollection<AccountDoc>("accounts").Count();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetTransactionCountAsync()
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    return _db.GetCollection<TransactionDoc>("transactions").Count();
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetPendingPayoutCountAsync()
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    return _db.GetCollection<RewardPayoutDoc>("reward_payouts").Count(x => x.Status != "Paid");
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<int> GetPendingBountyRefundCountAsync()
+        {
+            return await Task.Run(() =>
+            {
+                lock (_dbLock)
+                {
+                    return _db.GetCollection<BountyDoc>("bounties").Count(x => x.RefundPending);
+                }
+            }).ConfigureAwait(false);
+        }
+
+        public void Checkpoint()
+        {
+            lock (_dbLock)
+            {
+                _db?.Checkpoint();
+            }
         }
 
         public void Dispose()

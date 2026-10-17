@@ -21,6 +21,15 @@ namespace KizShop.Commands
             CommandRunner.Run(caller, async () =>
             {
                 var plugin = KizShopPlugin.Instance;
+                var cfg = plugin.Configuration.Instance;
+
+                if (!plugin.CheckRateLimit(caller, "buy", cfg.RateLimitBuyMs, out double remSecs))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("rate_limited", DurationFormatter.FormatSeconds(remSecs, true)), UnityEngine.Color.red));
+                    return;
+                }
+
                 var player = (UnturnedPlayer)caller;
 
                 if (command.Length < 1)
@@ -79,6 +88,14 @@ namespace KizShop.Commands
                     else
                     {
                         KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? new object[0]), UnityEngine.Color.red);
+                        if (result.ErrorKey == "buy_item_not_found")
+                        {
+                            var suggestions = plugin.Shop.GetSuggestions(query, "Item", 3);
+                            if (suggestions.Count > 0)
+                            {
+                                KizChat.Say(caller, plugin.Translate("did_you_mean", string.Join(", ", suggestions)), UnityEngine.Color.yellow);
+                            }
+                        }
                     }
                 });
             });

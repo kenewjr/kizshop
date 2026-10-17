@@ -53,6 +53,14 @@ namespace KizShop.Commands
                 // 3. /shop search <text> [page]
                 if (firstArg.Equals("search", StringComparison.OrdinalIgnoreCase))
                 {
+                    var cfg = plugin.Configuration.Instance;
+                    if (!plugin.CheckRateLimit(caller, "search", cfg.RateLimitSearchMs, out double remSecs))
+                    {
+                        plugin.Dispatcher.QueueOnMainThread(() =>
+                            KizChat.Say(caller, plugin.Translate("rate_limited", DurationFormatter.FormatSeconds(remSecs, true)), UnityEngine.Color.red));
+                        return;
+                    }
+
                     if (command.Length < 2)
                     {
                         plugin.Dispatcher.QueueOnMainThread(() =>
@@ -73,7 +81,7 @@ namespace KizShop.Commands
                         searchText = string.Join(" ", command, 1, command.Length - 1).Trim();
                     }
 
-                    var (searchEntries, searchPages, totalMatches) = plugin.Shop.Search(searchText, searchPage, pageSize);
+                    var (searchResults, searchPages, totalMatches) = plugin.Shop.SearchCatalog(searchText, searchPage, 8);
                     if (totalMatches == 0)
                     {
                         plugin.Dispatcher.QueueOnMainThread(() =>
@@ -81,7 +89,18 @@ namespace KizShop.Commands
                         return;
                     }
 
-                    await DisplayItemsAsync(caller, searchEntries, searchPage, searchPages, $"search '{searchText}'").ConfigureAwait(false);
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                    {
+                        KizChat.Say(caller, plugin.Translate("shop_header_context", $"search '{searchText}'", searchPage, searchPages), UnityEngine.Color.cyan);
+                        foreach (var res in searchResults)
+                        {
+                            string buyStr = res.BuyPrice > 0 ? plugin.FormatMoney(Money.FromDecimal(res.BuyPrice)) : plugin.Translate("cost_not_available");
+                            string sellStr = res.SellPrice > 0 ? plugin.FormatMoney(Money.FromDecimal(res.SellPrice)) : plugin.Translate("cost_not_available");
+                            string displayId = res.Kind == "Kit" ? "Kit" : res.Id.ToString();
+                            KizChat.Say(caller, plugin.Translate("shop_item_entry", res.Name, displayId, buyStr, sellStr), UnityEngine.Color.white);
+                        }
+                        KizChat.Say(caller, plugin.Translate("shop_footer"), UnityEngine.Color.gray);
+                    });
                     return;
                 }
 

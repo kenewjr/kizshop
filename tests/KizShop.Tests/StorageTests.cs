@@ -253,6 +253,60 @@ namespace KizShop.Tests
             var afterClear = await _storage.GetKitCooldownAsync(steamId, kitName);
             Assert.Null(afterClear);
         }
+
+        [Fact]
+        public async Task DoubleInitialize_IsIdempotent()
+        {
+            // Initializing already initialized storage must succeed without error
+            await _storage.InitializeAsync();
+            var count = await _storage.GetAccountCountAsync();
+            Assert.True(count >= 0);
+        }
+
+        [Fact]
+        public async Task PurgeTransactionsOlderThan_RemovesOnlyOlderTransactions()
+        {
+            ulong steamId = 76561198000000555;
+            await _storage.LogTransactionAsync(steamId, "TxOld", Money.FromDecimal(10m), "Old");
+            await Task.Delay(50); // slight time gap
+            var cutoff = DateTime.UtcNow;
+            await Task.Delay(50);
+            await _storage.LogTransactionAsync(steamId, "TxNew", Money.FromDecimal(20m), "New");
+
+            int initialCount = await _storage.GetTransactionCountAsync();
+            Assert.True(initialCount >= 2);
+
+            // Cutoff is between TxOld and TxNew
+            int purged = await _storage.PurgeTransactionsOlderThanAsync(cutoff);
+            Assert.True(purged >= 1);
+
+            var history = await _storage.GetTransactionHistoryAsync(steamId, 10, 0);
+            Assert.DoesNotContain(history, t => t.Type == "TxOld");
+            Assert.Contains(history, t => t.Type == "TxNew");
+        }
+
+        [Fact]
+        public async Task StorageCounts_ReflectActualData()
+        {
+            ulong acc1 = 76561198000000888;
+            ulong acc2 = 76561198000000889;
+            await _storage.SetBalanceAsync(acc1, Money.FromDecimal(100m), "init");
+            await _storage.SetBalanceAsync(acc2, Money.FromDecimal(200m), "init");
+
+            int accCount = await _storage.GetAccountCountAsync();
+            Assert.True(accCount >= 2);
+
+            int initialTx = await _storage.GetTransactionCountAsync();
+            await _storage.LogTransactionAsync(acc1, "CountTest", Money.FromDecimal(5m), "detail");
+            int afterTx = await _storage.GetTransactionCountAsync();
+            Assert.Equal(initialTx + 1, afterTx);
+
+            int pendingPayouts = await _storage.GetPendingPayoutCountAsync();
+            Assert.True(pendingPayouts >= 0);
+
+            int pendingRefunds = await _storage.GetPendingBountyRefundCountAsync();
+            Assert.True(pendingRefunds >= 0);
+        }
     }
 
     public class SqliteStorageTests : StorageTestBase

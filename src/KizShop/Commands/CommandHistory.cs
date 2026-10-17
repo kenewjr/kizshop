@@ -21,6 +21,15 @@ namespace KizShop.Commands
             CommandRunner.Run(caller, async () =>
             {
                 var plugin = KizShopPlugin.Instance;
+                var cfg = plugin.Configuration.Instance;
+
+                if (!plugin.CheckRateLimit(caller, "history", cfg.RateLimitHistoryMs, out double remSecs))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("rate_limited", DurationFormatter.FormatSeconds(remSecs, true)), UnityEngine.Color.red));
+                    return;
+                }
+
                 var player = (UnturnedPlayer)caller;
                 ulong steamId = player.CSteamID.m_SteamID;
 
@@ -33,7 +42,7 @@ namespace KizShop.Commands
                 int pageSize = 5;
                 int offset = (page - 1) * pageSize;
 
-                var records = await plugin.Storage.GetTransactionHistoryAsync(steamId, pageSize, offset).ConfigureAwait(false);
+                var records = await plugin.GetCachedHistoryAsync(steamId, page, pageSize, offset).ConfigureAwait(false);
 
                 plugin.Dispatcher.QueueOnMainThread(() =>
                 {

@@ -163,7 +163,8 @@ namespace KizShop.Commands
                         plugin.Dispatcher.QueueOnMainThread(() =>
                         {
                             var curBal = plugin.Economy.GetCachedBalance(placerSteamId);
-                            KizChat.Say(caller, plugin.Translate("bounty_insufficient_funds", plugin.FormatMoney(escrowAmount), plugin.FormatMoney(curBal)), UnityEngine.Color.red);
+                            Money shortfall = escrowAmount > curBal ? (escrowAmount - curBal) : Money.Zero;
+                            KizChat.Say(caller, plugin.Translate("bounty_insufficient_funds", plugin.FormatMoney(escrowAmount), plugin.FormatMoney(curBal), plugin.FormatMoney(shortfall)), UnityEngine.Color.red);
                         });
                         return;
                     }

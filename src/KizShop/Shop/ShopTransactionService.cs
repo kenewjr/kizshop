@@ -367,8 +367,16 @@ namespace KizShop.Shop
                             break;
                         case CheckSpaceReason.NoSpace:
                         default:
-                            errKey = "buy_no_space";
-                            errArgs = new object[] { quantity, entry.Name };
+                            if (!string.IsNullOrEmpty(spaceRes.PageDetails))
+                            {
+                                errKey = "buy_no_space_details";
+                                errArgs = new object[] { quantity, entry.Name, spaceRes.PageDetails };
+                            }
+                            else
+                            {
+                                errKey = "buy_no_space";
+                                errArgs = new object[] { quantity, entry.Name };
+                            }
                             break;
                     }
                     return new ShopTransactionResult { Success = false, ErrorKey = errKey, ErrorArgs = errArgs };
@@ -378,11 +386,12 @@ namespace KizShop.Shop
                 if (!withdrawRes.Success)
                 {
                     var curBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                    Money shortfall = totalMoney > curBal ? (totalMoney - curBal) : Money.Zero;
                     return new ShopTransactionResult
                     {
                         Success = false,
                         ErrorKey = "buy_insufficient_funds",
-                        ErrorArgs = new object[] { totalMoney, entry.Name, curBal }
+                        ErrorArgs = new object[] { totalMoney, quantity, entry.Name, curBal, shortfall }
                     };
                 }
 
@@ -475,7 +484,11 @@ namespace KizShop.Shop
                         {
                             await _inventoryGateway.RemoveItemByReferenceAsync(steamId, deliveredItem).ConfigureAwait(false);
                         }
-                        catch { }
+                        catch (Exception remEx)
+                        {
+                            // ponytail: best-effort rollback of delivered item during purchase failure
+                            KizLog.Warning($"[KizShop] Best-effort rollback failed removing item {entry.Id} for player {steamId}: {remEx.Message}");
+                        }
                     }
 
                     if (withdrawRes != null && withdrawRes.Success)
@@ -1246,7 +1259,8 @@ namespace KizShop.Shop
                 if (elapsed < cfg.VehicleCooldownSeconds)
                 {
                     int remain = (int)Math.Ceiling(cfg.VehicleCooldownSeconds - elapsed);
-                    return new ShopTransactionResult { Success = false, ErrorKey = "vehicle_cooldown", ErrorArgs = new object[] { remain } };
+                    string formattedWait = DurationFormatter.FormatSeconds(remain);
+                    return new ShopTransactionResult { Success = false, ErrorKey = "vehicle_cooldown", ErrorArgs = new object[] { remain, formattedWait } };
                 }
             }
 
@@ -1281,11 +1295,12 @@ namespace KizShop.Shop
                 if (!withdrawRes.Success)
                 {
                     var curBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                    Money shortfall = costMoney > curBal ? (costMoney - curBal) : Money.Zero;
                     return new ShopTransactionResult
                     {
                         Success = false,
                         ErrorKey = "vehicle_insufficient_funds",
-                        ErrorArgs = new object[] { costMoney, entry.Name, curBal }
+                        ErrorArgs = new object[] { costMoney, entry.Name, curBal, shortfall }
                     };
                 }
 
@@ -1312,7 +1327,11 @@ namespace KizShop.Shop
                 {
                     _vehicleCooldowns[steamId] = _clock.UtcNow;
                 }
-                catch { }
+                catch (Exception cdEx)
+                {
+                    // ponytail: best-effort vehicle cooldown update
+                    KizLog.Warning($"[KizShop] Failed to update vehicle cooldown for {steamId}: {cdEx.Message}");
+                }
 
                 Money newBal = withdrawRes.NewBalance;
                 try
@@ -1371,7 +1390,8 @@ namespace KizShop.Shop
             ulong steamId,
             string kitName,
             Func<string, bool> hasPermission,
-            bool isAdmin = false)
+            bool isAdmin = false,
+            IEnumerable<string> playerGroups = null)
         {
             if (string.IsNullOrWhiteSpace(kitName))
             {
@@ -1389,7 +1409,8 @@ namespace KizShop.Shop
                 return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_disabled" };
             }
 
-            if (!string.IsNullOrEmpty(kit.Permission) && !isAdmin && (hasPermission == null || !hasPermission(kit.Permission)))
+            string perm = kit.RequiredPermission;
+            if (!string.IsNullOrEmpty(perm) && !isAdmin && (hasPermission == null || !hasPermission(perm)))
             {
                 return new ShopKitTransactionResult { Success = false, ErrorKey = "kit_no_permission" };
             }
@@ -1406,12 +1427,9 @@ namespace KizShop.Shop
                 return preCooldown;
             }
 
-            var sale = _shopService?.ActiveSale;
-            decimal effectiveBuyPrice = kit.BuyPrice;
-            if (sale != null && sale.IsActive(_clock.UtcNow) && sale.BuyMultiplier != 1.0m)
-            {
-                effectiveBuyPrice = Math.Round(effectiveBuyPrice * sale.BuyMultiplier, 2, MidpointRounding.AwayFromZero);
-            }
+            decimal effectiveBuyPrice = _shopService != null
+                ? _shopService.GetEffectiveKitPrice(kit, playerGroups)
+                : kit.BuyPrice;
 
             if (!Money.TryFromDecimal(effectiveBuyPrice, cfg.MaxTransactionAmount, out var kitPrice, out var moneyErr))
             {
@@ -1452,11 +1470,12 @@ namespace KizShop.Shop
                 if (!withdrawRes.Success)
                 {
                     var curBal = await _economyService.GetBalanceAsync(steamId).ConfigureAwait(false);
+                    Money shortfall = kitPrice > curBal ? (kitPrice - curBal) : Money.Zero;
                     return new ShopKitTransactionResult
                     {
                         Success = false,
                         ErrorKey = "kit_insufficient_funds",
-                        ErrorArgs = new object[] { kitPrice, kit.DisplayName ?? kit.Name, curBal }
+                        ErrorArgs = new object[] { kitPrice, kit.DisplayName ?? kit.Name, curBal, shortfall }
                     };
                 }
 
@@ -1582,11 +1601,12 @@ namespace KizShop.Shop
                 if (elapsed < kit.CooldownSeconds)
                 {
                     int rem = (int)Math.Ceiling(kit.CooldownSeconds - elapsed);
+                    string formattedWait = DurationFormatter.FormatSeconds(rem);
                     return new ShopKitTransactionResult
                     {
                         Success = false,
                         ErrorKey = "kit_cooldown",
-                        ErrorArgs = new object[] { rem }
+                        ErrorArgs = new object[] { rem, formattedWait }
                     };
                 }
             }

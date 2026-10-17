@@ -21,10 +21,19 @@ namespace KizShop.Commands
             CommandRunner.Run(caller, async () =>
             {
                 var plugin = KizShopPlugin.Instance;
-                int count = plugin.Configuration.Instance.BaltopCount;
+                var cfg = plugin.Configuration.Instance;
+
+                if (!plugin.CheckRateLimit(caller, "baltop", cfg.RateLimitBalTopMs, out double remSecs))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("rate_limited", DurationFormatter.FormatSeconds(remSecs, true)), UnityEngine.Color.red));
+                    return;
+                }
+
+                int count = cfg.BaltopCount;
                 if (count <= 0) count = 10;
 
-                var list = await plugin.Economy.GetTopBalancesAsync(count).ConfigureAwait(false);
+                var list = await plugin.GetCachedBalTopAsync(count).ConfigureAwait(false);
 
                 plugin.Dispatcher.QueueOnMainThread(() =>
                 {

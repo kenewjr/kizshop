@@ -193,7 +193,7 @@ namespace KizShop.Commands
 
             if (plugin.DiscordWebhook != null)
             {
-                _ = plugin.DiscordWebhook.SendGiveawayAlertAsync(giverName, adminSteamId, moneyAmount, successCount, totalDistributed);
+                FireAndForget.Run(() => plugin.DiscordWebhook.SendGiveawayAlertAsync(giverName, adminSteamId, moneyAmount, successCount, totalDistributed), "DiscordGiveawayAlert");
             }
 
             plugin.Dispatcher.QueueOnMainThread(() =>

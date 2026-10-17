@@ -24,6 +24,17 @@ namespace KizShop.Commands
                 var player = (UnturnedPlayer)caller;
                 ulong steamId = player.CSteamID.m_SteamID;
 
+                var cfg = plugin.Configuration.Instance;
+                string rateLimitBucket = (command.Length > 0 && command[0].Equals("all", StringComparison.OrdinalIgnoreCase)) ? "sell_all" : "sell";
+                int rateLimitMs = rateLimitBucket == "sell_all" ? cfg.RateLimitSellAllMs : cfg.RateLimitBuyMs;
+
+                if (!plugin.CheckRateLimit(caller, rateLimitBucket, rateLimitMs, out double remSecs))
+                {
+                    plugin.Dispatcher.QueueOnMainThread(() =>
+                        KizChat.Say(caller, plugin.Translate("rate_limited", DurationFormatter.FormatSeconds(remSecs, true)), UnityEngine.Color.red));
+                    return;
+                }
+
                 if (command.Length < 1)
                 {
                     plugin.Dispatcher.QueueOnMainThread(() =>
@@ -186,6 +197,14 @@ namespace KizShop.Commands
                     else
                     {
                         KizChat.Say(caller, plugin.Translate(result.ErrorKey, result.ErrorArgs ?? Array.Empty<object>()), UnityEngine.Color.red);
+                        if (result.ErrorKey == "sell_item_not_found" || result.ErrorKey == "item_not_found")
+                        {
+                            var suggestions = plugin.Shop.GetSuggestions(query, "Item", 3);
+                            if (suggestions.Count > 0)
+                            {
+                                KizChat.Say(caller, plugin.Translate("did_you_mean", string.Join(", ", suggestions)), UnityEngine.Color.yellow);
+                            }
+                        }
                     }
                 });
             });

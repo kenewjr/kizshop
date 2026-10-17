@@ -126,7 +126,8 @@ namespace KizShop.Commands
                         {
                             if (result.FromOldBalance < amount)
                             {
-                                KizChat.Say(caller, plugin.Translate("pay_insufficient_funds", plugin.FormatMoney(amount)), UnityEngine.Color.red);
+                                var shortfall = amount - result.FromOldBalance;
+                                KizChat.Say(caller, plugin.Translate("pay_insufficient_funds", plugin.FormatMoney(amount), plugin.FormatMoney(shortfall), plugin.FormatMoney(result.FromOldBalance)), UnityEngine.Color.red);
                             }
                             else
                             {
